@@ -1,0 +1,1313 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuracao Sistema Modbus</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; margin-bottom: 20px; }
+        .menu { display: flex; gap: 10px; margin-bottom: 30px; flex-wrap: wrap; }
+        .menu-btn { padding: 12px 24px; border: 2px solid #007bff; background: white; color: #007bff; border-radius: 4px; cursor: pointer; font-size: 16px; transition: all 0.3s; }
+        .menu-btn:hover { background: #007bff; color: white; }
+        .menu-btn.active { background: #007bff; color: white; }
+        .section { display: none; }
+        .section.active { display: block; }
+        .device-card { 
+            border: 2px solid #007bff; 
+            margin: 20px 0; 
+            padding: 20px; 
+            border-radius: 8px; 
+            background: #f8f9fa;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .device-header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 20px; 
+            padding-bottom: 15px;
+            border-bottom: 2px solid #007bff;
+        }
+        .device-header h3 {
+            color: #007bff;
+            font-size: 20px;
+            margin: 0;
+        }
+        .device-config {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border: 1px solid #dee2e6;
+        }
+        .device-config h4 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 16px;
+            border-bottom: 1px solid #dee2e6;
+            padding-bottom: 8px;
+        }
+        .device-fields {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .device-fields label {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .device-fields label span {
+            font-weight: bold;
+            color: #495057;
+            font-size: 13px;
+        }
+        .register-card {
+            background: white;
+            border: 1px solid #dee2e6;
+            border-left: 4px solid #28a745;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .register-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .register-header h5 {
+            color: #28a745;
+            margin: 0;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .register-fields {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .register-fields label {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .register-fields label span {
+            font-weight: bold;
+            color: #6c757d;
+            font-size: 12px;
+        }
+        .register-fields input,
+        .register-fields select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.15s ease-in-out;
+        }
+        .register-fields input:focus,
+        .register-fields select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+        }
+        .device-fields input,
+        .device-fields select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.15s ease-in-out;
+        }
+        .device-fields input:focus,
+        .device-fields select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+        }
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            margin-right: 8px;
+        }
+        .btn { padding: 8px 16px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-primary { background: #007bff; color: white; }
+        .btn-success { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-info { background: #17a2b8; color: white; }
+        .btn-warning { background: #ffc107; color: #212529; }
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn-small { padding: 4px 8px; font-size: 12px; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .config-group { margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
+        .config-group label { display: block; margin: 8px 0; font-weight: bold; }
+        .config-group input, .config-group select { width: 100%; max-width: 300px; }
+        .version { position: absolute; top: 20px; right: 20px; color: #666; font-size: 14px; font-weight: bold; }
+        .container { position: relative; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="version">AFR Modbus Manager V0.1.0</div>
+        <h1>Configuracao Sistema Modbus RTU Master</h1>
+        <div id="status"></div>
+        
+        <div class="menu">
+            <button class="menu-btn active" onclick="showSection('modbus')">Modbus</button>
+            <button class="menu-btn" onclick="showSection('mqtt')">MQTT</button>
+            <button class="menu-btn" onclick="showSection('wifi')">Rede WiFi</button>
+            <button class="menu-btn" onclick="showSection('rtc')">Data Hora (RTC)</button>
+            <button class="menu-btn" onclick="showSection('console')">Console</button>
+        </div>
+
+        <!-- Seção Modbus -->
+        <div id="modbus" class="section active">
+            <h2>Configuracao Modbus RTU</h2>
+            <div class="config-group">
+                <label>Baud Rate RS485: 
+                    <select id="baudRate">
+                        <option value="1200">1200</option>
+                        <option value="2400">2400</option>
+                        <option value="4800">4800</option>
+                        <option value="9600" selected>9600</option>
+                        <option value="19200">19200</option>
+                        <option value="38400">38400</option>
+                        <option value="57600">57600</option>
+                        <option value="115200">115200</option>
+                    </select>
+                </label>
+            </div>
+            <div id="devices"></div>
+            <button class="btn btn-primary" onclick="addDevice()">Adicionar Dispositivo</button>
+            
+            <!-- Seção de Cálculos -->
+            <div style="margin-top: 30px; padding: 20px; background: #f9f9f9; border-radius: 5px; border: 1px solid #ddd;">
+                <h3>Codigo de Calculo (Expressoes Matematicas)</h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    <strong>✨ Suporte a múltiplas linhas:</strong> Cada linha é uma expressão separada que será calculada sequencialmente.<br>
+                    Use a estrutura <code>{d[deviceIndex][registerIndex]}</code> para acessar valores. Exemplo: <code>{d[0][0]} * 1.8 + 32</code><br>
+                    <strong>d[0][0]</strong> = primeiro dispositivo, primeiro registro | <strong>d[0][1]</strong> = primeiro dispositivo, segundo registro<br>
+                    <strong>d[1][0]</strong> = segundo dispositivo, primeiro registro | e assim por diante<br>
+                    Operacoes suportadas: +, -, *, /, %, ^, (), sin(), cos(), tan(), sqrt(), abs(), log(), exp()<br>
+                    <strong>Comparações:</strong> >, <, >=, <=, ==, != (retorna 1.0 se verdadeiro, 0.0 se falso)<br>
+                    <strong>Condicional:</strong> <code>if(condição, valor_verdadeiro, valor_falso)</code> - Exemplo: <code>if({d[0][0]} > 25, 1, 0)</code><br>
+                    <strong>Atribuição:</strong> Use <code>{d[i][j]}=expressao</code> para escrever resultado em um registro. Exemplo: <code>{d[0][2]}=if({d[0][0]} > 25, 1, 0)</code><br>
+                    <strong>Potência:</strong> Use <code>^</code> ou <code>pow(base, expoente)</code>. Exemplo: <code>10^2</code> ou <code>pow(10, 2)</code> = 100<br>
+                    <strong>Comentários:</strong> Linhas que começam com <code>#</code> são ignoradas.
+                </p>
+                <div id="calculationContainer" style="background: white; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
+                    <textarea id="calculationCode" style="width: 100%; min-height: 150px; padding: 10px; font-family: monospace; border: none; outline: none; resize: vertical; background: transparent;" placeholder="Exemplo com múltiplas linhas:&#10;{d[0][2]}={d[0][0]} * 1.8 + 32&#10;{d[0][3]}={d[0][1]} / 100&#10;# Esta linha é um comentário"></textarea>
+                    <div id="calculationResults" style="margin-top: 10px; border-top: 1px solid #e0e0e0; padding-top: 10px;"></div>
+                </div>
+                <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+                    <button class="btn btn-success" onclick="testCalculation()">▶ Testar Calculo</button>
+                    <button class="btn btn-info" onclick="loadVariables()">Carregar Variaveis Disponiveis</button>
+                </div>
+                <div id="variablesList" style="margin-top: 15px; padding: 10px; background: white; border-radius: 4px; max-height: 200px; overflow-y: auto; display: none;">
+                    <h4 style="margin: 0 0 10px 0;">Variaveis Disponiveis:</h4>
+                    <div id="variablesContent"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Seção MQTT -->
+        <div id="mqtt" class="section">
+            <h2>Configuracao MQTT</h2>
+            <div class="config-group">
+                <label>Habilitado: <input type="checkbox" id="mqttEnabled"></label>
+                <label>Servidor MQTT: <input type="text" id="mqttServer" placeholder="broker.example.com"></label>
+                <label>Porta: <input type="number" id="mqttPort" placeholder="1883" min="1" max="65535"></label>
+                <label>Usuario: <input type="text" id="mqttUser" placeholder="usuario"></label>
+                <label>Senha: <input type="password" id="mqttPassword" placeholder="senha"></label>
+                <label>Topico Base: <input type="text" id="mqttTopic" placeholder="esp32/modbus"></label>
+                <label>Intervalo Publicacao (segundos): <input type="number" id="mqttInterval" placeholder="60" min="1"></label>
+            </div>
+        </div>
+
+        <!-- Seção WiFi -->
+        <div id="wifi" class="section">
+            <h2>Configuracao Rede WiFi</h2>
+            
+            <!-- Lista de redes disponíveis -->
+            <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                    <h3 style="margin: 0; color: #333;">Redes WiFi Disponiveis</h3>
+                    <button class="btn btn-primary" onclick="scanWiFi()" style="padding: 5px 15px; font-size: 14px;">Atualizar Scan</button>
+                </div>
+                <div id="wifiScanResults" style="max-height: 300px; overflow-y: auto;">
+                    <p style="color: #666; text-align: center; padding: 20px;">Clique em "Atualizar Scan" para buscar redes disponiveis</p>
+                </div>
+            </div>
+            
+            <div class="config-group">
+                <label>Modo: 
+                    <select id="wifiMode">
+                        <option value="ap">Access Point (AP)</option>
+                        <option value="sta">Station (STA)</option>
+                    </select>
+                </label>
+                <div id="apConfig">
+                    <label>SSID AP: <input type="text" id="apSSID" placeholder="ESP32-Modbus-Config"></label>
+                    <label>Senha AP: <input type="password" id="apPassword" placeholder="12345678"></label>
+                </div>
+                <div id="staConfig" style="display: none;">
+                    <label>SSID Rede: <input type="text" id="staSSID" placeholder="Nome da Rede"></label>
+                    <label>Senha Rede: <input type="password" id="staPassword" placeholder="Senha da Rede"></label>
+                    <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #ddd;">
+                        <p style="color: #666; font-size: 12px; margin-bottom: 10px;">
+                            <strong>Atencao:</strong> Ao salvar a configuracao no modo STA, o sistema tentara conectar 3 vezes. 
+                            Se nao conseguir, voltara automaticamente para o modo AP.
+                        </p>
+                        <button class="btn btn-success" onclick="saveAndReboot()">Salvar e Reiniciar</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Seção RTC -->
+        <div id="rtc" class="section">
+            <h2>Configuracao Data e Hora (RTC)</h2>
+            
+            <!-- Exibição do horário atual em tempo real -->
+            <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; margin-bottom: 20px; text-align: center;">
+                <h3 style="margin: 0 0 10px 0; color: #333;">Horario Atual do Dispositivo</h3>
+                <div id="currentTimeDisplay" style="font-size: 32px; font-weight: bold; color: #2196F3; font-family: monospace;">
+                    --:--:--
+                </div>
+                <div id="uptimeDisplay" style="font-size: 14px; color: #666; margin-top: 5px;">
+                    Uptime: --
+                </div>
+            </div>
+            
+            <div class="config-group">
+                <label>Habilitado: <input type="checkbox" id="rtcEnabled"></label>
+                <label>Fuso Horario: 
+                    <select id="rtcTimezone">
+                        <option value="-3">UTC-3 (Brasilia)</option>
+                        <option value="-4">UTC-4 (Manaus)</option>
+                        <option value="-5">UTC-5 (Rio Branco)</option>
+                        <option value="0">UTC+0 (Londres)</option>
+                        <option value="1">UTC+1</option>
+                        <option value="2">UTC+2</option>
+                        <option value="3">UTC+3</option>
+                    </select>
+                </label>
+                <label>Servidor NTP: <input type="text" id="ntpServer" placeholder="pool.ntp.org"></label>
+                <label>Atualizar via NTP: <input type="checkbox" id="ntpEnabled" checked></label>
+                <div id="manualTime" style="display: none;">
+                    <label>Data (YYYY-MM-DD): <input type="date" id="rtcDate"></label>
+                    <label>Hora (HH:MM:SS): <input type="time" id="rtcTime" step="1"></label>
+                    <button class="btn btn-primary" onclick="setManualTime()" style="margin-top: 10px;">Definir Data/Hora Manual</button>
+                </div>
+                <div id="ntpSyncButton" style="margin-top: 10px; display: none;">
+                    <button class="btn btn-success" onclick="syncNTPNow()">Sincronizar NTP Agora</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Seção Console -->
+        <div id="console" class="section">
+            <h2>Console do Sistema</h2>
+            <div style="background: #1e1e1e; color: #d4d4d4; padding: 15px; border-radius: 4px; font-family: 'Courier New', monospace; height: 500px; overflow-y: auto; margin-bottom: 10px;" id="consoleOutput">
+                <div style="color: #4ec9b0;">Console iniciado. Aguardando conexao...</div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <input type="text" id="consoleInput" placeholder="Digite um comando..." style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" onkeypress="if(event.key === 'Enter') sendConsoleCommand()">
+                <button class="btn btn-primary" onclick="sendConsoleCommand()">Enviar</button>
+                <button class="btn btn-danger" onclick="clearConsole()">Limpar</button>
+            </div>
+            <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                <strong>Comandos disponiveis:</strong> help, status, reboot, heap, uptime
+            </div>
+        </div>
+
+        <!-- Botões de ação -->
+        <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #ddd;">
+            <button class="btn btn-success" onclick="saveAllConfig()">Salvar Todas as Configuracoes</button>
+            <button class="btn btn-info" onclick="exportConfig()">Exportar Configuracoes</button>
+            <button class="btn btn-warning" onclick="importConfig()">Importar Configuracoes</button>
+            <button class="btn btn-primary" onclick="readRegisters()">Ler Registros Modbus</button>
+        </div>
+        
+        <!-- Input oculto para importar configurações -->
+        <input type="file" id="importFileInput" accept=".json" style="display: none;" onchange="handleImportFile(event)">
+    </div>
+    <script>
+        let devices = [];
+        let baudRate = 9600;
+        let currentSection = 'modbus';
+
+        function showSection(section) {
+            // Esconde todas as seções
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.menu-btn').forEach(b => b.classList.remove('active'));
+            
+            // Mostra a seção selecionada
+            document.getElementById(section).classList.add('active');
+            event.target.classList.add('active');
+            currentSection = section;
+            
+            // Iniciar atualizações quando mostrar seções específicas
+            if (section === 'rtc') {
+                startTimeUpdate();
+            } else {
+                stopTimeUpdate();
+            }
+            
+            if (section === 'wifi') {
+                scanWiFi();
+            }
+        }
+        
+        // Variáveis para atualização de tempo
+        let timeUpdateInterval = null;
+        
+        function startTimeUpdate() {
+            // Atualiza imediatamente
+            updateCurrentTime();
+            // Atualiza a cada segundo
+            if (timeUpdateInterval) clearInterval(timeUpdateInterval);
+            timeUpdateInterval = setInterval(updateCurrentTime, 1000);
+        }
+        
+        function stopTimeUpdate() {
+            if (timeUpdateInterval) {
+                clearInterval(timeUpdateInterval);
+                timeUpdateInterval = null;
+            }
+        }
+        
+        async function updateCurrentTime() {
+            try {
+                const response = await fetch('/api/rtc/current');
+                const data = await response.json();
+                
+                if (data.time) {
+                    let displayText = data.time;
+                    // Se há data válida e RTC está inicializado, mostra data e hora
+                    if (data.initialized && data.date && data.date !== '0000-00-00') {
+                        displayText = data.date + ' ' + data.time;
+                    } else if (!data.initialized) {
+                        // Se não está inicializado, mostra aviso
+                        displayText = data.time + ' (RTC não inicializado)';
+                    }
+                    document.getElementById('currentTimeDisplay').textContent = displayText;
+                }
+                if (data.uptime) {
+                    document.getElementById('uptimeDisplay').textContent = 'Uptime: ' + data.uptime;
+                }
+            } catch (error) {
+                console.error('Erro ao atualizar horário:', error);
+            }
+        }
+        
+        async function scanWiFi() {
+            const resultsDiv = document.getElementById('wifiScanResults');
+            resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Escaneando redes...</p>';
+            
+            try {
+                const response = await fetch('/api/wifi/scan');
+                const data = await response.json();
+                
+                if (data.status === 'success' && data.networks && data.networks.length > 0) {
+                    let html = '<table style="width: 100%; border-collapse: collapse;">';
+                    html += '<thead><tr style="background: #ddd; font-weight: bold;">';
+                    html += '<th style="padding: 8px; text-align: left;">SSID</th>';
+                    html += '<th style="padding: 8px; text-align: center;">Sinal</th>';
+                    html += '<th style="padding: 8px; text-align: center;">Qualidade</th>';
+                    html += '<th style="padding: 8px; text-align: center;">Canal</th>';
+                    html += '<th style="padding: 8px; text-align: center;">Segurança</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    // Ordena por qualidade (RSSI)
+                    const networks = [...data.networks].sort((a, b) => b.rssi - a.rssi);
+                    
+                    networks.forEach(network => {
+                        const qualityColor = network.quality >= 80 ? '#4CAF50' : 
+                                           network.quality >= 60 ? '#8BC34A' : 
+                                           network.quality >= 40 ? '#FFC107' : 
+                                           network.quality >= 20 ? '#FF9800' : '#F44336';
+                        
+                        html += '<tr style="border-bottom: 1px solid #eee;">';
+                        html += '<td style="padding: 8px;"><strong>' + escapeHtml(network.ssid) + '</strong></td>';
+                        html += '<td style="padding: 8px; text-align: center;">' + network.rssi + ' dBm</td>';
+                        html += '<td style="padding: 8px; text-align: center;">';
+                        html += '<div style="display: inline-block; width: 60px; height: 20px; background: #e0e0e0; border-radius: 3px; position: relative;">';
+                        html += '<div style="width: ' + network.quality + '%; height: 100%; background: ' + qualityColor + '; border-radius: 3px;"></div>';
+                        html += '<span style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 11px; font-weight: bold; color: ' + (network.quality > 50 ? '#fff' : '#000') + ';">' + network.quality + '%</span>';
+                        html += '</div>';
+                        html += '<div style="font-size: 11px; color: #666; margin-top: 2px;">' + network.qualityDesc + '</div>';
+                        html += '</td>';
+                        html += '<td style="padding: 8px; text-align: center;">' + network.channel + '</td>';
+                        html += '<td style="padding: 8px; text-align: center;">' + (network.encryption === 'open' ? '<span style="color: #F44336;">Aberta</span>' : '<span style="color: #4CAF50;">Protegida</span>') + '</td>';
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    html += '<p style="text-align: center; color: #666; margin-top: 10px; font-size: 12px;">Total: ' + data.count + ' redes encontradas</p>';
+                    resultsDiv.innerHTML = html;
+                } else {
+                    resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Nenhuma rede encontrada</p>';
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = '<p style="color: #F44336; text-align: center; padding: 20px;">Erro ao escanear redes: ' + error + '</p>';
+                console.error('Erro ao escanear WiFi:', error);
+            }
+        }
+
+        // Atualizar visibilidade de configurações WiFi
+        document.getElementById('wifiMode').addEventListener('change', function() {
+            const mode = this.value;
+            document.getElementById('apConfig').style.display = mode === 'ap' ? 'block' : 'none';
+            document.getElementById('staConfig').style.display = mode === 'sta' ? 'block' : 'none';
+        });
+
+        // Atualizar visibilidade de configurações RTC
+        document.getElementById('ntpEnabled').addEventListener('change', function() {
+            document.getElementById('manualTime').style.display = this.checked ? 'none' : 'block';
+        });
+
+        function showStatus(message, isError) {
+            isError = isError || false;
+            const status = document.getElementById('status');
+            status.className = 'status ' + (isError ? 'error' : 'success');
+            status.textContent = message;
+            setTimeout(function() { status.textContent = ''; }, 3000);
+        }
+        
+        function addDevice() {
+            devices.push({
+                slaveAddress: 1,
+                enabled: true,
+                deviceName: '',
+                registers: []
+            });
+            renderDevices();
+        }
+        
+        function removeDevice(index) {
+            devices.splice(index, 1);
+            renderDevices();
+        }
+        
+        function addRegister(deviceIndex) {
+            devices[deviceIndex].registers.push({
+                address: 0,
+                isInput: true,
+                isOutput: false,
+                readOnly: false,
+                variableName: '',
+                gain: 1.0,
+                offset: 0.0,
+                kalmanEnabled: false,
+                kalmanQ: 0.01,
+                kalmanR: 0.1
+            });
+            renderDevices();
+        }
+        
+        // Função para mostrar/ocultar configurações do filtro de Kalman
+        function toggleKalmanConfig(deviceIndex, registerIndex) {
+            const configDiv = document.getElementById('kalmanConfig_' + deviceIndex + '_' + registerIndex);
+            const isEnabled = devices[deviceIndex].registers[registerIndex].kalmanEnabled;
+            if (configDiv) {
+                configDiv.style.display = isEnabled ? 'block' : 'none';
+            }
+        }
+        
+        function removeRegister(deviceIndex, regIndex) {
+            devices[deviceIndex].registers.splice(regIndex, 1);
+            renderDevices();
+        }
+        
+        function renderDevices() {
+            const container = document.getElementById('devices');
+            let html = '';
+            for (let dIdx = 0; dIdx < devices.length; dIdx++) {
+                const device = devices[dIdx];
+                const deviceName = device.deviceName || 'Dispositivo ' + (dIdx + 1);
+                
+                // Card do Dispositivo
+                html += '<div class="device-card">';
+                
+                // Cabeçalho do Dispositivo
+                html += '<div class="device-header">';
+                html += '<h3>' + escapeHtml(deviceName) + '</h3>';
+                html += '<div style="display: flex; gap: 10px;">';
+                html += '<button class="btn btn-success btn-small" onclick="saveDevice(' + dIdx + ')" title="Salvar este dispositivo">Salvar</button>';
+                html += '<button class="btn btn-danger btn-small" onclick="removeDevice(' + dIdx + ')">Remover</button>';
+                html += '</div>';
+                html += '</div>';
+                
+                // Configurações do Dispositivo
+                html += '<div class="device-config">';
+                html += '<h4>Configurações do Dispositivo</h4>';
+                html += '<div class="device-fields">';
+                html += '<label><span>Nome do Dispositivo</span><input type="text" value="' + escapeHtml(device.deviceName || '') + '" placeholder="ex: Sensor TH Renke" onchange="devices[' + dIdx + '].deviceName = this.value"></label>';
+                html += '<label><span>Endereço Modbus</span><input type="number" value="' + device.slaveAddress + '" onchange="devices[' + dIdx + '].slaveAddress = parseInt(this.value)" min="1" max="247"></label>';
+                html += '<label><span>Status</span><div style="display: flex; align-items: center; padding-top: 8px;"><input type="checkbox" ' + (device.enabled ? 'checked' : '') + ' onchange="devices[' + dIdx + '].enabled = this.checked" style="width: auto; margin-right: 8px;"><span style="font-weight: normal;">Habilitado</span></div></label>';
+                html += '</div>';
+                html += '</div>';
+                
+                // Seção de Registros
+                html += '<div class="device-config">';
+                html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">';
+                html += '<h4 style="margin: 0;">Registros (' + device.registers.length + ')</h4>';
+                html += '<button class="btn btn-primary btn-small" onclick="addRegister(' + dIdx + ')">+ Adicionar Registro</button>';
+                html += '</div>';
+                
+                // Cards dos Registros
+                for (let rIdx = 0; rIdx < device.registers.length; rIdx++) {
+                    const reg = device.registers[rIdx];
+                    const regName = reg.variableName || 'Registro ' + (rIdx + 1);
+                    
+                    html += '<div class="register-card">';
+                    html += '<div class="register-header">';
+                    html += '<h5>Registro ' + (rIdx + 1) + ': ' + escapeHtml(regName) + '</h5>';
+                    html += '<button class="btn btn-danger btn-small" onclick="removeRegister(' + dIdx + ', ' + rIdx + ')">Remover</button>';
+                    html += '</div>';
+                    
+                    html += '<div class="register-fields">';
+                    html += '<label><span>Endereço</span><input type="number" value="' + reg.address + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].address = parseInt(this.value)" min="0"></label>';
+                    html += '<label><span>Tipo de Registro</span><select onchange="devices[' + dIdx + '].registers[' + rIdx + '].isInput = this.value === \'input\'">';
+                    html += '<option value="input" ' + (reg.isInput ? 'selected' : '') + '>Holding Register (0x03)</option>';
+                    html += '<option value="output" ' + (!reg.isInput ? 'selected' : '') + '>Input Register (0x04)</option>';
+                    html += '</select></label>';
+                    html += '<label><span>Nome da Variável</span><input type="text" value="' + escapeHtml(reg.variableName || '') + '" placeholder="ex: temperatura" onchange="devices[' + dIdx + '].registers[' + rIdx + '].variableName = this.value"></label>';
+                    html += '<label><span>Ganho</span><input type="number" step="0.00000001" value="' + (reg.gain !== undefined ? reg.gain : 1.0) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].gain = parseFloat(this.value) || 1.0"></label>';
+                    html += '<label><span>Offset</span><input type="number" step="0.01" value="' + (reg.offset !== undefined ? reg.offset : 0.0) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].offset = parseFloat(this.value) || 0.0"></label>';
+                    
+                    // Campo para modificar valor atual (apenas para registros que podem ser escritos)
+                    const canWriteReg = !reg.readOnly && reg.isInput;
+                    if (canWriteReg) {
+                        // Calcula valor processado atual (se houver valor raw)
+                        const rawValue = reg.value !== undefined ? reg.value : 0;
+                        const gain = reg.gain !== undefined ? reg.gain : 1.0;
+                        const offset = reg.offset !== undefined ? reg.offset : 0.0;
+                        const processedValue = (rawValue * gain) + offset;
+                        
+                        html += '<label style="grid-column: 1 / -1; border-top: 1px solid #e9ecef; padding-top: 12px; margin-top: 8px;"><span style="color: #007bff; font-weight: bold;">✏️ Valor Atual (Modificar)</span>';
+                        html += '<div style="display: flex; gap: 10px; align-items: center; margin-top: 8px;">';
+                        html += '<input type="number" step="0.01" id="regWriteVal_' + dIdx + '_' + rIdx + '" value="' + processedValue.toFixed(2) + '" style="flex: 1; padding: 8px; border: 2px solid #007bff; border-radius: 4px;" placeholder="Digite o novo valor">';
+                        html += '<button class="btn btn-primary btn-small" onclick="writeRegisterValue(' + dIdx + ', ' + rIdx + ')" title="Escrever valor no Modbus" style="white-space: nowrap;">Escrever</button>';
+                        html += '<span style="font-size: 11px; color: #666; font-weight: normal; padding: 4px 8px; background: #f8f9fa; border-radius: 4px;">Raw: ' + rawValue + '</span>';
+                        html += '</div></label>';
+                    }
+                    
+                    html += '<label><span>Opções</span><div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">';
+                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" ' + (reg.isOutput ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].isOutput = this.checked" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Registro de Saída</span></div>';
+                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" ' + (reg.readOnly ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].readOnly = this.checked; renderDevices();" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Somente Leitura</span></div>';
+                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" id="kalmanCheck_' + dIdx + '_' + rIdx + '" ' + (reg.kalmanEnabled ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].kalmanEnabled = this.checked; toggleKalmanConfig(' + dIdx + ', ' + rIdx + ');" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Filtro de Kalman</span></div>';
+                    html += '</div></label>';
+                    
+                    // Configurações do Filtro de Kalman (visíveis apenas quando habilitado)
+                    html += '<div id="kalmanConfig_' + dIdx + '_' + rIdx + '" style="display: ' + (reg.kalmanEnabled ? 'block' : 'none') + '; margin-top: 12px; padding: 12px; background: #f0f8ff; border: 1px solid #007bff; border-radius: 4px;">';
+                    html += '<div style="font-weight: bold; color: #007bff; margin-bottom: 10px; font-size: 13px;">⚙️ Configurações do Filtro de Kalman</div>';
+                    html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">';
+                    html += '<label><span style="font-size: 12px; color: #495057;">Q (Process Noise)</span>';
+                    html += '<input type="number" step="0.0001" min="0.0001" value="' + (reg.kalmanQ !== undefined ? reg.kalmanQ : 0.01) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].kalmanQ = parseFloat(this.value) || 0.01" style="width: 100%; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;">';
+                    html += '<div style="font-size: 11px; color: #666; margin-top: 4px;">Ruído do processo<br>(menor = mais responsivo)</div>';
+                    html += '</label>';
+                    html += '<label><span style="font-size: 12px; color: #495057;">R (Measurement Noise)</span>';
+                    html += '<input type="number" step="0.0001" min="0.0001" value="' + (reg.kalmanR !== undefined ? reg.kalmanR : 0.1) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].kalmanR = parseFloat(this.value) || 0.1" style="width: 100%; padding: 6px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;">';
+                    html += '<div style="font-size: 11px; color: #666; margin-top: 4px;">Ruído da medição<br>(maior = mais suave)</div>';
+                    html += '</label>';
+                    html += '</div>';
+                    html += '<div style="margin-top: 8px; padding: 8px; background: #e7f3ff; border-radius: 4px; font-size: 11px; color: #004085;">';
+                    html += '<strong>💡 Dica:</strong> Valores padrão recomendados: Q = 0.01, R = 0.1<br>';
+                    html += '• Q menor = filtro mais responsivo (menos suavização)<br>';
+                    html += '• R maior = filtro mais suave (mais suavização)';
+                    html += '</div>';
+                    html += '</div>';
+                    html += '</div>';
+                    html += '</div>';
+                }
+                
+                html += '</div>'; // Fim device-config (Registros)
+                html += '</div>'; // Fim device-card
+            }
+            container.innerHTML = html;
+        }
+        
+        async function loadAllConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                
+                // Modbus
+                baudRate = data.baudRate || 9600;
+                document.getElementById('baudRate').value = baudRate;
+                devices = data.devices || [];
+                
+                // Garante que todos os dispositivos e registros tenham campos necessários
+                devices.forEach(device => {
+                    if (!device.deviceName) device.deviceName = '';
+                    if (device.registers) {
+                        device.registers.forEach(reg => {
+                            if (!reg.variableName) reg.variableName = '';
+                            if (reg.gain === undefined) reg.gain = 1.0;
+                            if (reg.offset === undefined) reg.offset = 0.0;
+                            if (reg.readOnly === undefined) reg.readOnly = false;
+                            if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
+                            if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
+                            if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                        });
+                    }
+                });
+                
+                renderDevices();
+                
+                // Carrega código de cálculo
+                if (data.calculationCode) {
+                    document.getElementById('calculationCode').value = data.calculationCode;
+                }
+                
+                // MQTT
+                if (data.mqtt) {
+                    document.getElementById('mqttEnabled').checked = data.mqtt.enabled || false;
+                    document.getElementById('mqttServer').value = data.mqtt.server || '';
+                    document.getElementById('mqttPort').value = data.mqtt.port || 1883;
+                    document.getElementById('mqttUser').value = data.mqtt.user || '';
+                    document.getElementById('mqttPassword').value = data.mqtt.password || '';
+                    document.getElementById('mqttTopic').value = data.mqtt.topic || '';
+                    document.getElementById('mqttInterval').value = data.mqtt.interval || 60;
+                }
+                
+                // WiFi
+                if (data.wifi) {
+                    document.getElementById('wifiMode').value = data.wifi.mode || 'ap';
+                    document.getElementById('wifiMode').dispatchEvent(new Event('change'));
+                    document.getElementById('apSSID').value = data.wifi.apSSID || '';
+                    document.getElementById('apPassword').value = data.wifi.apPassword || '';
+                    document.getElementById('staSSID').value = data.wifi.staSSID || '';
+                    document.getElementById('staPassword').value = data.wifi.staPassword || '';
+                }
+                
+                // RTC
+                if (data.rtc) {
+                    document.getElementById('rtcEnabled').checked = data.rtc.enabled || false;
+                    document.getElementById('rtcTimezone').value = data.rtc.timezone || '-3';
+                    document.getElementById('ntpServer').value = data.rtc.ntpServer || 'pool.ntp.org';
+                    document.getElementById('ntpEnabled').checked = data.rtc.ntpEnabled !== false;
+                    document.getElementById('ntpEnabled').dispatchEvent(new Event('change'));
+                    // Não carrega data/hora manual pois ela é calculada dinamicamente
+                    // Mas pode ser usada para definir manualmente se necessário
+                }
+                
+                showStatus('Configuracao carregada');
+            } catch (error) {
+                showStatus('Erro ao carregar: ' + error, true);
+            }
+        }
+        
+        function updateNTPButtonVisibility() {
+            const ntpEnabled = document.getElementById('ntpEnabled').checked;
+            const rtcEnabled = document.getElementById('rtcEnabled').checked;
+            const ntpButton = document.getElementById('ntpSyncButton');
+            if (ntpButton) {
+                ntpButton.style.display = (ntpEnabled && rtcEnabled) ? 'block' : 'none';
+            }
+        }
+        
+        async function saveDevice(deviceIndex) {
+            console.log('[Acao] Botao Salvar Dispositivo ' + (deviceIndex + 1) + ' clicado');
+            try {
+                // Garante que todos os registros do dispositivo tenham campos necessários
+                if (devices[deviceIndex] && devices[deviceIndex].registers) {
+                    devices[deviceIndex].registers.forEach(reg => {
+                        if (reg.gain === undefined) reg.gain = 1.0;
+                        if (reg.offset === undefined) reg.offset = 0.0;
+                        if (!reg.variableName) reg.variableName = '';
+                        if (reg.readOnly === undefined) reg.readOnly = false;
+                        if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
+                        if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
+                        if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                    });
+                }
+                if (!devices[deviceIndex].deviceName) devices[deviceIndex].deviceName = '';
+                
+                // Salva toda a configuração (o backend sempre salva tudo)
+                await saveAllConfig();
+                showStatus('Dispositivo ' + (deviceIndex + 1) + ' salvo com sucesso!');
+                
+                // Recarrega as variáveis disponíveis após salvar
+                setTimeout(() => {
+                    loadVariables();
+                }, 500);
+            } catch (error) {
+                showStatus('Erro ao salvar dispositivo: ' + error, true);
+            }
+        }
+        
+        async function saveAllConfig() {
+            console.log('[Acao] Botao Salvar Todas as Configuracoes clicado');
+            try {
+                baudRate = parseInt(document.getElementById('baudRate').value);
+                
+                // Garante que todos os dispositivos e registros tenham campos necessários
+                devices.forEach(device => {
+                    if (!device.deviceName) device.deviceName = '';
+                    if (device.registers) {
+                        device.registers.forEach(reg => {
+                            if (reg.gain === undefined) reg.gain = 1.0;
+                            if (reg.offset === undefined) reg.offset = 0.0;
+                            if (!reg.variableName) reg.variableName = '';
+                            if (reg.readOnly === undefined) reg.readOnly = false;
+                            if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
+                            if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
+                            if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                        });
+                    }
+                });
+                
+                const config = {
+                    baudRate: baudRate,
+                    deviceCount: devices.length,
+                    devices: devices,
+                    mqtt: {
+                        enabled: document.getElementById('mqttEnabled').checked,
+                        server: document.getElementById('mqttServer').value,
+                        port: parseInt(document.getElementById('mqttPort').value) || 1883,
+                        user: document.getElementById('mqttUser').value,
+                        password: document.getElementById('mqttPassword').value,
+                        topic: document.getElementById('mqttTopic').value,
+                        interval: parseInt(document.getElementById('mqttInterval').value) || 60
+                    },
+                    wifi: {
+                        mode: document.getElementById('wifiMode').value,
+                        apSSID: document.getElementById('apSSID').value,
+                        apPassword: document.getElementById('apPassword').value,
+                        staSSID: document.getElementById('staSSID').value,
+                        staPassword: document.getElementById('staPassword').value
+                    },
+                    rtc: {
+                        enabled: document.getElementById('rtcEnabled').checked,
+                        timezone: parseInt(document.getElementById('rtcTimezone').value),
+                        ntpServer: document.getElementById('ntpServer').value,
+                        ntpEnabled: document.getElementById('ntpEnabled').checked,
+                        date: document.getElementById('rtcDate').value,
+                        time: document.getElementById('rtcTime').value
+                    },
+                    calculationCode: document.getElementById('calculationCode').value
+                };
+                
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                
+                if (response.ok) {
+                    showStatus('Todas as configuracoes salvas com sucesso!');
+                } else {
+                    showStatus('Erro ao salvar', true);
+                }
+            } catch (error) {
+                showStatus('Erro: ' + error, true);
+            }
+        }
+        
+        async function saveAndReboot() {
+            try {
+                // Primeiro salva a configuração
+                await saveAllConfig();
+                
+                // Aguarda um pouco para garantir que salvou
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Solicita reboot
+                const response = await fetch('/api/reboot', {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    showStatus('Configuracao salva! Reiniciando...', false);
+                    // A página será recarregada quando o ESP32 reiniciar
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                } else {
+                    showStatus('Erro ao reiniciar', true);
+                }
+            } catch (error) {
+                showStatus('Erro: ' + error, true);
+            }
+        }
+        
+        async function readRegisters() {
+            try {
+                const response = await fetch('/api/read');
+                const data = await response.json();
+                showStatus('Registros lidos. Verifique o console do servidor.');
+                console.log(data);
+            } catch (error) {
+                showStatus('Erro ao ler: ' + error, true);
+            }
+        }
+        
+        // ==================== CONSOLE ====================
+        let ws = null;
+        let reconnectInterval = null;
+
+        function initConsole() {
+            connectWebSocket();
+        }
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.hostname}/console`;
+            
+            try {
+                if (ws) {
+                    ws.close();
+                }
+                
+                ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    addConsoleMessage('Conectado ao console', 'success');
+                    if (reconnectInterval) {
+                        clearInterval(reconnectInterval);
+                        reconnectInterval = null;
+                    }
+                };
+                
+                ws.onmessage = function(event) {
+                    // Processa mensagens com quebras de linha
+                    const messages = event.data.split('\r\n');
+                    messages.forEach(msg => {
+                        if (msg.trim()) {
+                            addConsoleMessage(msg, 'info');
+                        }
+                    });
+                };
+                
+                ws.onerror = function(error) {
+                    addConsoleMessage('Erro na conexao WebSocket', 'error');
+                };
+                
+                ws.onclose = function() {
+                    addConsoleMessage('Conexao fechada. Tentando reconectar...', 'warning');
+                    if (!reconnectInterval) {
+                        reconnectInterval = setInterval(connectWebSocket, 3000);
+                    }
+                };
+            } catch (error) {
+                addConsoleMessage('Erro ao conectar: ' + error, 'error');
+            }
+        }
+
+        function addConsoleMessage(message, type) {
+            const output = document.getElementById('consoleOutput');
+            const div = document.createElement('div');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            let color = '#d4d4d4';
+            if (type === 'success') color = '#4ec9b0';
+            else if (type === 'error') color = '#f48771';
+            else if (type === 'warning') color = '#dcdcaa';
+            else if (type === 'info') color = '#569cd6';
+            
+            div.style.color = color;
+            div.style.whiteSpace = 'pre-wrap';
+            div.style.wordBreak = 'break-word';
+            div.innerHTML = `<span style="color: #808080;">[${timestamp}]</span> ${escapeHtml(message)}`;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function sendConsoleCommand() {
+            const input = document.getElementById('consoleInput');
+            const command = input.value.trim();
+            
+            if (command && ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(command);
+                input.value = '';
+            } else if (command) {
+                addConsoleMessage('Console nao conectado. Aguarde...', 'warning');
+            }
+        }
+
+        function clearConsole() {
+            document.getElementById('consoleOutput').innerHTML = '';
+        }
+
+        // Atualizar showSection para inicializar console quando selecionado
+        const originalShowSection = showSection;
+        showSection = function(section) {
+            originalShowSection(section);
+            if (section === 'console' && (!ws || ws.readyState !== WebSocket.OPEN)) {
+                initConsole();
+            }
+        };
+
+        // Funções para cálculos
+        async function testCalculation() {
+            const expression = document.getElementById('calculationCode').value;
+            const resultsDiv = document.getElementById('calculationResults');
+            
+            if (!expression.trim()) {
+                resultsDiv.innerHTML = '<div style="padding: 8px; background: #f8d7da; color: #721c24; border-radius: 4px; font-size: 12px;">Erro: Expressão vazia</div>';
+                return;
+            }
+            
+            // Limpa resultados anteriores
+            resultsDiv.innerHTML = '<div style="padding: 8px; color: #666; font-size: 12px;">⏳ Testando...</div>';
+            
+            try {
+                const response = await fetch('/api/calc/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ expression: expression })
+                });
+                
+                const data = await response.json();
+                
+                // Limpa resultados
+                resultsDiv.innerHTML = '';
+                
+                if (data.status === 'ok' || data.status === 'partial') {
+                    // Processa múltiplas linhas
+                    const lines = expression.split('\n');
+                    let lineIndex = 0;
+                    
+                    lines.forEach((line, idx) => {
+                        const trimmedLine = line.trim();
+                        
+                        // Ignora linhas vazias e comentários
+                        if (trimmedLine.length === 0 || trimmedLine.charAt(0) === '#') {
+                            return;
+                        }
+                        
+                        // Busca resultado correspondente
+                        let lineResult = null;
+                        if (data.results && Array.isArray(data.results)) {
+                            lineResult = data.results.find(r => r.lineNumber === lineIndex + 1);
+                        }
+                        
+                        // Cria célula estilo Jupyter
+                        const cellDiv = document.createElement('div');
+                        cellDiv.style.marginBottom = '15px';
+                        cellDiv.style.border = '1px solid #e0e0e0';
+                        cellDiv.style.borderRadius = '4px';
+                        cellDiv.style.overflow = 'hidden';
+                        
+                        // Input (código)
+                        const inputDiv = document.createElement('div');
+                        inputDiv.style.padding = '10px';
+                        inputDiv.style.background = '#f8f9fa';
+                        inputDiv.style.borderBottom = '1px solid #e0e0e0';
+                        inputDiv.style.fontFamily = 'monospace';
+                        inputDiv.style.fontSize = '13px';
+                        inputDiv.style.color = '#333';
+                        inputDiv.textContent = 'In [' + (lineIndex + 1) + ']: ' + trimmedLine;
+                        cellDiv.appendChild(inputDiv);
+                        
+                        // Output (resultado)
+                        const outputDiv = document.createElement('div');
+                        outputDiv.style.padding = '10px';
+                        outputDiv.style.fontFamily = 'monospace';
+                        outputDiv.style.fontSize = '13px';
+                        
+                        if (lineResult) {
+                            if (lineResult.status === 'ok') {
+                                outputDiv.style.background = '#f0f8f0';
+                                outputDiv.style.color = '#155724';
+                                
+                                let outputText = 'Out[' + (lineIndex + 1) + ']: ';
+                                
+                                if (lineResult.hasAssignment) {
+                                    outputText += 'Atribuição executada\n';
+                                    outputText += '  → {d[' + lineResult.targetDevice + '][' + lineResult.targetRegister + ']} = ' + lineResult.result.toFixed(6);
+                                    if (lineResult.rawValue !== undefined) {
+                                        outputText += '\n  → Valor raw: ' + lineResult.rawValue.toFixed(2);
+                                    }
+                                } else {
+                                    outputText += lineResult.result.toFixed(6);
+                                }
+                                
+                                outputDiv.textContent = outputText;
+                            } else {
+                                outputDiv.style.background = '#fff5f5';
+                                outputDiv.style.color = '#c53030';
+                                outputDiv.textContent = 'Erro: ' + (lineResult.error || 'Erro desconhecido');
+                            }
+                        } else {
+                            outputDiv.style.background = '#fffbf0';
+                            outputDiv.style.color = '#856404';
+                            outputDiv.textContent = 'Aguardando processamento...';
+                        }
+                        
+                        cellDiv.appendChild(outputDiv);
+                        resultsDiv.appendChild(cellDiv);
+                        
+                        lineIndex++;
+                    });
+                } else {
+                    // Erro geral
+                    resultsDiv.innerHTML = '<div style="padding: 8px; background: #f8d7da; color: #721c24; border-radius: 4px; font-size: 12px;">Erro: ' + (data.error || 'Erro desconhecido') + '</div>';
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = '<div style="padding: 8px; background: #f8d7da; color: #721c24; border-radius: 4px; font-size: 12px;">Erro: ' + error + '</div>';
+            }
+        }
+        
+        async function loadVariables() {
+            const listDiv = document.getElementById('variablesList');
+            const contentDiv = document.getElementById('variablesContent');
+            
+            try {
+                const response = await fetch('/api/calc/variables');
+                const data = await response.json();
+                
+                if (data.devices && data.devices.length > 0) {
+                    let html = '<p style="font-size: 12px; color: #666; margin-bottom: 10px;"><strong>Estrutura:</strong> Use {d[deviceIndex][registerIndex]} nas expressoes</p>';
+                    html += '<table style="width: 100%; border-collapse: collapse; font-size: 12px;">';
+                    html += '<thead><tr style="background: #ddd;">';
+                    html += '<th style="padding: 5px; text-align: left;">Dispositivo</th>';
+                    html += '<th style="padding: 5px; text-align: left;">Variavel</th>';
+                    html += '<th style="padding: 5px; text-align: left;">Referencia</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Valor</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Raw</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Gain</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Offset</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Endereco</th>';
+                    html += '<th style="padding: 5px; text-align: center;">Acao</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.devices.forEach((device, deviceIndex) => {
+                        const deviceName = device.deviceName || 'Dispositivo ' + (deviceIndex + 1);
+                        const registers = device.registers || [];
+                        
+                        registers.forEach((reg, registerIndex) => {
+                            const varName = reg.variableName || 'sem_nome';
+                            const isReadOnly = reg.readOnly === true;
+                            const canWrite = !isReadOnly && reg.isInput === true;
+                            
+                            html += '<tr style="border-bottom: 1px solid #eee;">';
+                            html += '<td style="padding: 5px;">' + escapeHtml(deviceName) + '</td>';
+                            html += '<td style="padding: 5px;">' + escapeHtml(varName) + '</td>';
+                            html += '<td style="padding: 5px;"><strong>{d[' + deviceIndex + '][' + registerIndex + ']}</strong></td>';
+                            html += '<td style="padding: 5px; text-align: center;"><strong>' + (reg.value !== undefined ? reg.value.toFixed(2) : 'N/A') + '</strong></td>';
+                            html += '<td style="padding: 5px; text-align: center;">' + (reg.valueRaw !== undefined ? reg.valueRaw : 'N/A') + '</td>';
+                            html += '<td style="padding: 5px; text-align: center;">' + (reg.gain !== undefined ? reg.gain.toFixed(2) : '1.00') + '</td>';
+                            html += '<td style="padding: 5px; text-align: center;">' + (reg.offset !== undefined ? reg.offset.toFixed(2) : '0.00') + '</td>';
+                            html += '<td style="padding: 5px; text-align: center;">' + (reg.address !== undefined ? reg.address : 'N/A') + '</td>';
+                            
+                            if (canWrite) {
+                                html += '<td style="padding: 5px; text-align: center;">';
+                                html += '<input type="number" step="0.01" id="writeVal_' + deviceIndex + '_' + registerIndex + '" style="width: 80px; padding: 2px;" placeholder="Novo valor">';
+                                html += '<button class="btn btn-primary" onclick="writeVariable(' + deviceIndex + ', ' + registerIndex + ')" style="padding: 2px 8px; font-size: 11px; margin-left: 5px;">Escrever</button>';
+                                html += '</td>';
+                            } else {
+                                html += '<td style="padding: 5px; text-align: center; color: #999;">' + (isReadOnly ? 'Somente Leitura' : 'N/A') + '</td>';
+                            }
+                            
+                            html += '</tr>';
+                        });
+                    });
+                    
+                    html += '</tbody></table>';
+                    contentDiv.innerHTML = html;
+                    listDiv.style.display = 'block';
+                } else {
+                    contentDiv.innerHTML = '<p style="color: #666; text-align: center;">Nenhum dispositivo configurado. Adicione dispositivos e registros.</p>';
+                    listDiv.style.display = 'block';
+                }
+            } catch (error) {
+                contentDiv.innerHTML = '<p style="color: #f44336;">Erro ao carregar variaveis: ' + error + '</p>';
+                listDiv.style.display = 'block';
+            }
+        }
+        
+        // Função para escrever valor de variável (da tabela de variáveis disponíveis)
+        async function writeVariable(deviceIndex, registerIndex) {
+            const inputId = 'writeVal_' + deviceIndex + '_' + registerIndex;
+            const input = document.getElementById(inputId);
+            const value = parseFloat(input.value);
+            
+            if (isNaN(value)) {
+                showStatus('Valor inválido', true);
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/variable/write', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deviceIndex: deviceIndex,
+                        registerIndex: registerIndex,
+                        value: value
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'ok') {
+                    showStatus('Valor escrito com sucesso!');
+                    input.value = '';
+                    // Recarrega variáveis para atualizar valores
+                    setTimeout(() => loadVariables(), 500);
+                } else {
+                    showStatus('Erro: ' + (data.error || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao escrever: ' + error, true);
+            }
+        }
+        
+        // Função para escrever valor de registro (dos cards de configuração)
+        async function writeRegisterValue(deviceIndex, registerIndex) {
+            const inputId = 'regWriteVal_' + deviceIndex + '_' + registerIndex;
+            const input = document.getElementById(inputId);
+            const value = parseFloat(input.value);
+            
+            if (isNaN(value)) {
+                showStatus('Valor inválido', true);
+                return;
+            }
+            
+            // Verifica se o registro pode ser escrito
+            const device = devices[deviceIndex];
+            const reg = device.registers[registerIndex];
+            
+            if (reg.readOnly) {
+                showStatus('Este registro é somente leitura', true);
+                return;
+            }
+            
+            if (!reg.isInput) {
+                showStatus('Apenas Holding Registers podem ser escritos', true);
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/variable/write', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        deviceIndex: deviceIndex,
+                        registerIndex: registerIndex,
+                        value: value
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'ok') {
+                    showStatus('Valor escrito com sucesso no Modbus!');
+                    // Atualiza o valor raw exibido
+                    const gain = reg.gain !== undefined ? reg.gain : 1.0;
+                    const offset = reg.offset !== undefined ? reg.offset : 0.0;
+                    const rawValue = (value - offset) / gain;
+                    // Atualiza o valor na estrutura local
+                    reg.value = Math.round(rawValue);
+                    // Atualiza o display do valor raw
+                    const rawDisplay = input.parentElement.querySelector('span');
+                    if (rawDisplay) {
+                        rawDisplay.textContent = 'Raw: ' + Math.round(rawValue);
+                    }
+                    // Recarrega variáveis para atualizar valores na tabela
+                    setTimeout(() => loadVariables(), 500);
+                } else {
+                    showStatus('Erro: ' + (data.error || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao escrever: ' + error, true);
+            }
+        }
+        
+        // Função para exportar configurações
+        async function exportConfig() {
+            try {
+                const response = await fetch('/api/config/export');
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'config.json';
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                showStatus('Configurações exportadas com sucesso!');
+            } catch (error) {
+                showStatus('Erro ao exportar: ' + error, true);
+            }
+        }
+        
+        // Função para importar configurações
+        function importConfig() {
+            document.getElementById('importFileInput').click();
+        }
+        
+        // Handler para processar arquivo importado
+        async function handleImportFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = async function(e) {
+                try {
+                    const jsonContent = e.target.result;
+                    const configData = JSON.parse(jsonContent);
+                    
+                    // Valida se é um JSON de configuração válido
+                    if (!configData.hasOwnProperty('devices') || !Array.isArray(configData.devices)) {
+                        showStatus('Arquivo de configuração inválido', true);
+                        return;
+                    }
+                    
+                    // Envia para o servidor
+                    const response = await fetch('/api/config/import', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: jsonContent
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok && data.status === 'ok') {
+                        showStatus('Configurações importadas com sucesso! Recarregando...');
+                        // Recarrega a configuração
+                        setTimeout(() => {
+                            loadAllConfig();
+                            window.location.reload();
+                        }, 1000);
+                    } else {
+                        showStatus('Erro: ' + (data.error || 'Erro ao importar'), true);
+                    }
+                } catch (error) {
+                    showStatus('Erro ao processar arquivo: ' + error, true);
+                }
+            };
+            reader.readAsText(file);
+            
+            // Limpa o input para permitir importar o mesmo arquivo novamente
+            event.target.value = '';
+        }
+        
+        // Carrega configuracao ao iniciar
+        loadAllConfig();
+    </script>
+</body>
+</html>

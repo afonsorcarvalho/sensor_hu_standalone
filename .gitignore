@@ -1,0 +1,80 @@
+# PlatformIO
+.pio/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+*.tmp
+
+# Compiled files
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# PlatformIO specific
+platformio.ini.bak
+sdkconfig
+sdkconfig.old
+
+# Environment variables
+.env
+.env.local
+
+# Backup files
+*.bak
+*~
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Documentation builds
+docs/_build/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# ESP32 specific
+partitions.csv.bak
