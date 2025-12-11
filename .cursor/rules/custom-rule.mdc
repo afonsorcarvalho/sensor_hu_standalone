@@ -1,0 +1,30 @@
+# Regras de Desenvolvimento
+
+## Separação de Arquivos por Features
+
+SEMPRE utilize separação de arquivos para as features. Cada feature deve ter seus próprios arquivos de implementação (.cpp) e cabeçalho (.h).
+
+### Diretrizes:
+- Cada funcionalidade principal deve ter seu próprio arquivo
+- Evite colocar múltiplas features no mesmo arquivo
+- Mantenha arquivos focados em uma única responsabilidade
+- Use nomes descritivos que indiquem claramente a funcionalidade do arquivo
+
+### Exemplos de separação:
+- WiFi: `wifi_manager.h` / `wifi_manager.cpp`
+- Configuração: `config_storage.h` / `config_storage.cpp`
+- Modbus: `modbus_handler.h` / `modbus_handler.cpp`
+- Web Server: `web_server.h` / `web_server.cpp`
+- RTC: `rtc_manager.h` / `rtc_manager.cpp`
+- Console: `console.h` / `console.cpp`
+- Expressões: `expression_parser.h` / `expression_parser.cpp`
+- Cálculos: `calculations.h` / `calculations.cpp`
+
+### Quando criar novos arquivos:
+- Ao adicionar uma nova funcionalidade que não se encaixa em arquivos existentes
+- Quando um arquivo existente está ficando muito grande (>500 linhas)
+- Quando uma feature tem múltiplas responsabilidades que podem ser separadas
+  
+## commit
+- SEMPRE realize o commit apos modificações importantes
+  

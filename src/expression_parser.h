@@ -30,9 +30,11 @@ struct DeviceValues {
  * @param outputSize Tamanho do buffer de saída
  * @param errorMsg Buffer para mensagem de erro (opcional)
  * @param errorMsgSize Tamanho do buffer de erro
+ * @param tempVariables Array de variáveis temporárias (opcional)
+ * @param tempVarCount Número de variáveis temporárias (opcional)
  * @return true se a substituição foi bem-sucedida, false caso contrário
  */
-bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, char* output, size_t outputSize, char* errorMsg = nullptr, size_t errorMsgSize = 0);
+bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, char* output, size_t outputSize, char* errorMsg = nullptr, size_t errorMsgSize = 0, Variable* tempVariables = nullptr, int tempVarCount = 0);
 
 /**
  * @brief Avalia uma expressão matemática com variáveis
@@ -57,12 +59,14 @@ double getVariableValue(const char* varName, Variable* variables, int varCount);
 
 /**
  * @brief Estrutura para armazenar informações de atribuição
- * Exemplo: {d[1][0]}={d[2][0]} + exp({d[1][0]})
+ * Exemplo: {d[1][0]}={d[2][0]} + exp({d[1][0]}) ou a=2
  */
 struct AssignmentInfo {
     bool hasAssignment;      // true se a expressão contém atribuição (=)
-    int targetDeviceIndex;   // Índice do dispositivo de destino
-    int targetRegisterIndex; // Índice do registro de destino
+    bool isVariableAssignment; // true se é atribuição a variável temporária (ex: a=2), false se é {d[i][j]}=...
+    char targetVariable[32];  // Nome da variável temporária (se isVariableAssignment == true)
+    int targetDeviceIndex;   // Índice do dispositivo de destino (se isVariableAssignment == false)
+    int targetRegisterIndex; // Índice do registro de destino (se isVariableAssignment == false)
     char* expression;        // Expressão do segundo membro (após o =)
     size_t expressionSize;  // Tamanho alocado para expression
 };

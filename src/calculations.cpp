@@ -6,6 +6,7 @@
 #include "calculations.h"
 #include "modbus_handler.h"
 #include "console.h"
+#include "kalman_filter.h"
 
 void performCalculations() {
     // Verifica se há código de cálculo configurado
@@ -28,9 +29,26 @@ void performCalculations() {
             // Aplica gain e offset: valor_processado = (valor_raw * gain) + offset
             float rawValue = (float)config.devices[i].registers[j].value;
             float processedValue = (rawValue * config.devices[i].registers[j].gain) + config.devices[i].registers[j].offset;
+            
+            // Se o filtro de Kalman está habilitado e inicializado, usa o valor do Kalman
+            if (config.devices[i].registers[j].kalmanEnabled && kalmanStates[i][j].initialized) {
+                float kalmanValue = kalmanStates[i][j].estimate;
+                processedValue = (kalmanValue * config.devices[i].registers[j].gain) + config.devices[i].registers[j].offset;
+            }
+            
             deviceValues.values[i][j] = (double)processedValue;
         }
     }
+    
+    // Arrays para armazenar variáveis temporárias (máximo 50 variáveis)
+    // k[i] = nome da variável (máximo 5 caracteres), v[i] = valor
+    const int MAX_TEMP_VARS = 50;
+    char tempVarNames[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
+    double tempVarValues[MAX_TEMP_VARS];
+    int tempVarCount = 0;
+    
+    // Converte para formato Variable para compatibilidade com substituteDeviceValues
+    Variable tempVariables[MAX_TEMP_VARS];
     
     // Divide o código em linhas e processa cada uma separadamente
     String codeStr = String(config.calculationCode);
@@ -82,9 +100,9 @@ void performCalculations() {
         // Se há atribuição, processa expressão do segundo membro
         const char* expressionToProcess = assignmentInfo.hasAssignment ? assignmentInfo.expression : lineBuffer;
         
-        // Substitui {d[i][j]} na expressão pelos valores
+        // Substitui {d[i][j]} e variáveis temporárias na expressão pelos valores
         char processedExpression[2048];
-        bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg));
+        bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg), tempVariables, tempVarCount);
         
         if (!success) {
             // Log de erro no console (mas continua processando outras linhas)
@@ -110,8 +128,56 @@ void performCalculations() {
             continue;
         }
         
-        // Se há atribuição, escreve no registro de destino
+        // Se há atribuição, processa
         if (assignmentInfo.hasAssignment) {
+            // Se é atribuição a variável temporária
+            if (assignmentInfo.isVariableAssignment) {
+                // Limita nome a 5 caracteres
+                char varName[6];
+                strncpy(varName, assignmentInfo.targetVariable, 5);
+                varName[5] = '\0';
+                
+                // Armazena ou atualiza a variável temporária nos arrays k[] e v[]
+                bool varFound = false;
+                for (int i = 0; i < tempVarCount; i++) {
+                    if (strcmp(tempVarNames[i], varName) == 0) {
+                        tempVarValues[i] = result;
+                        // Atualiza também no array Variable para compatibilidade
+                        tempVariables[i].value = result;
+                        varFound = true;
+                        break;
+                    }
+                }
+                
+                if (!varFound) {
+                    // Adiciona nova variável temporária
+                    if (tempVarCount < MAX_TEMP_VARS) {
+                        strncpy(tempVarNames[tempVarCount], varName, 5);
+                        tempVarNames[tempVarCount][5] = '\0';
+                        tempVarValues[tempVarCount] = result;
+                        
+                        // Atualiza também no array Variable para compatibilidade
+                        strncpy(tempVariables[tempVarCount].name, varName, sizeof(tempVariables[tempVarCount].name) - 1);
+                        tempVariables[tempVarCount].name[sizeof(tempVariables[tempVarCount].name) - 1] = '\0';
+                        tempVariables[tempVarCount].value = result;
+                        
+                        tempVarCount++;
+                    } else {
+                        String logMsg = "[Linha " + String(lineNumber) + "] Aviso: limite de variaveis temporarias atingido (max: " + String(MAX_TEMP_VARS) + ")";
+                        consolePrint(logMsg + "\r\n");
+                    }
+                }
+                
+                // Log no console (sem mencionar {d[-1][-1]})
+                String logMsg = "[Linha " + String(lineNumber) + "] Variavel temporaria: " + String(varName) + " = " + String(processedExpression) + " = " + String(result, 2);
+                consolePrint(logMsg + "\r\n");
+                
+                freeAssignmentInfo(&assignmentInfo);
+                lineNumber++;
+                continue;
+            }
+            
+            // Se é atribuição para {d[i][j]}, escreve no registro de destino
             // Valida índices do destino
             if (assignmentInfo.targetDeviceIndex < 0 || assignmentInfo.targetDeviceIndex >= config.deviceCount) {
                 String logMsg = "[Linha " + String(lineNumber) + "] Erro: indice de dispositivo invalido: " + String(assignmentInfo.targetDeviceIndex);

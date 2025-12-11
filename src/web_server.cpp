@@ -1250,7 +1250,16 @@ void handleGetVariables(AsyncWebServerRequest *request) {
             // Calcula valor processado (com gain e offset)
             float rawValue = (float)config.devices[i].registers[j].value;
             float processedValue = (rawValue * config.devices[i].registers[j].gain) + config.devices[i].registers[j].offset;
-            reg["value"] = processedValue;  // Valor processado usado nas expressões
+            
+            // Se o filtro de Kalman está habilitado e inicializado, usa o valor do Kalman
+            if (config.devices[i].registers[j].kalmanEnabled && kalmanStates[i][j].initialized) {
+                // Aplica gain e offset ao valor do Kalman
+                float kalmanValue = kalmanStates[i][j].estimate;
+                processedValue = (kalmanValue * config.devices[i].registers[j].gain) + config.devices[i].registers[j].offset;
+            }
+            
+            reg["value"] = processedValue;  // Valor processado usado nas expressões (com Kalman se habilitado)
+            reg["kalmanEnabled"] = config.devices[i].registers[j].kalmanEnabled;
             
             reg["gain"] = config.devices[i].registers[j].gain;
             reg["offset"] = config.devices[i].registers[j].offset;
@@ -1666,6 +1675,16 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             }
         }
         
+        // Arrays para armazenar variáveis temporárias (máximo 50 variáveis)
+        // k[i] = nome da variável (máximo 5 caracteres), v[i] = valor
+        const int MAX_TEMP_VARS = 50;
+        char tempVarNames[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
+        double tempVarValues[MAX_TEMP_VARS];
+        int tempVarCount = 0;
+        
+        // Converte para formato Variable para compatibilidade com substituteDeviceValues
+        Variable tempVariables[MAX_TEMP_VARS];
+        
         // Processa múltiplas linhas
         DynamicJsonDocument responseDoc(4096);
         JsonArray results = responseDoc.createNestedArray("results");
@@ -1717,7 +1736,7 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             // Processa expressão
             const char* expressionToProcess = assignmentInfo.hasAssignment ? assignmentInfo.expression : lineBuffer;
             char processedExpression[2048];
-            bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg));
+            bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg), tempVariables, tempVarCount);
             
             if (!success) {
                 lineResult["status"] = "error";
@@ -1749,20 +1768,62 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             lineResult["processedExpression"] = processedExpression;
             
             if (assignmentInfo.hasAssignment) {
-                lineResult["hasAssignment"] = true;
-                lineResult["targetDevice"] = assignmentInfo.targetDeviceIndex;
-                lineResult["targetRegister"] = assignmentInfo.targetRegisterIndex;
-                
-                // Calcula valor raw
-                if (assignmentInfo.targetDeviceIndex >= 0 && 
-                    assignmentInfo.targetDeviceIndex < config.deviceCount &&
-                    assignmentInfo.targetRegisterIndex >= 0 &&
-                    assignmentInfo.targetRegisterIndex < config.devices[assignmentInfo.targetDeviceIndex].registerCount) {
+                // Se é atribuição a variável temporária
+                if (assignmentInfo.isVariableAssignment) {
+                    // Limita nome a 5 caracteres
+                    char varName[6];
+                    strncpy(varName, assignmentInfo.targetVariable, 5);
+                    varName[5] = '\0';
                     
-                    ModbusRegister* targetReg = &config.devices[assignmentInfo.targetDeviceIndex].registers[assignmentInfo.targetRegisterIndex];
-                    if (targetReg->gain != 0.0f) {
-                        float rawValue = (result - targetReg->offset) / targetReg->gain;
-                        lineResult["rawValue"] = rawValue;
+                    // Armazena ou atualiza a variável temporária nos arrays k[] e v[]
+                    bool varFound = false;
+                    for (int i = 0; i < tempVarCount; i++) {
+                        if (strcmp(tempVarNames[i], varName) == 0) {
+                            tempVarValues[i] = result;
+                            // Atualiza também no array Variable para compatibilidade
+                            tempVariables[i].value = result;
+                            varFound = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!varFound) {
+                        // Adiciona nova variável temporária
+                        if (tempVarCount < MAX_TEMP_VARS) {
+                            strncpy(tempVarNames[tempVarCount], varName, 5);
+                            tempVarNames[tempVarCount][5] = '\0';
+                            tempVarValues[tempVarCount] = result;
+                            
+                            // Atualiza também no array Variable para compatibilidade
+                            strncpy(tempVariables[tempVarCount].name, varName, sizeof(tempVariables[tempVarCount].name) - 1);
+                            tempVariables[tempVarCount].name[sizeof(tempVariables[tempVarCount].name) - 1] = '\0';
+                            tempVariables[tempVarCount].value = result;
+                            
+                            tempVarCount++;
+                        }
+                    }
+                    
+                    lineResult["hasAssignment"] = true;
+                    lineResult["isVariableAssignment"] = true;
+                    lineResult["targetVariable"] = varName;
+                    lineResult["message"] = "Variavel temporaria armazenada";
+                } else {
+                    lineResult["hasAssignment"] = true;
+                    lineResult["isVariableAssignment"] = false;
+                    lineResult["targetDevice"] = assignmentInfo.targetDeviceIndex;
+                    lineResult["targetRegister"] = assignmentInfo.targetRegisterIndex;
+                    
+                    // Calcula valor raw
+                    if (assignmentInfo.targetDeviceIndex >= 0 && 
+                        assignmentInfo.targetDeviceIndex < config.deviceCount &&
+                        assignmentInfo.targetRegisterIndex >= 0 &&
+                        assignmentInfo.targetRegisterIndex < config.devices[assignmentInfo.targetDeviceIndex].registerCount) {
+                        
+                        ModbusRegister* targetReg = &config.devices[assignmentInfo.targetDeviceIndex].registers[assignmentInfo.targetRegisterIndex];
+                        if (targetReg->gain != 0.0f) {
+                            float rawValue = (result - targetReg->offset) / targetReg->gain;
+                            lineResult["rawValue"] = rawValue;
+                        }
                     }
                 }
             }

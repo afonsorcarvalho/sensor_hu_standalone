@@ -517,7 +517,7 @@ double getVariableValue(const char* varName, Variable* variables, int varCount) 
 /**
  * @brief Substitui {d[i][j]} na expressão pelos valores correspondentes
  */
-bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, char* output, size_t outputSize, char* errorMsg, size_t errorMsgSize) {
+bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, char* output, size_t outputSize, char* errorMsg, size_t errorMsgSize, Variable* tempVariables, int tempVarCount) {
     if (!expression || !deviceValues || !output || outputSize == 0) {
         if (errorMsg && errorMsgSize > 0) {
             snprintf(errorMsg, errorMsgSize, "Parametros invalidos");
@@ -532,7 +532,7 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
     const char* pos = expression;
     
     while (*pos != '\0') {
-        // Procura por {
+        // Procura por { ou por identificador de variável temporária
         if (*pos == '{') {
             const char* start = pos;
             pos++; // Pula o {
@@ -656,6 +656,72 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
                 output[outputPos++] = '{';
                 output[outputPos] = '\0';
             }
+        } else if (isalpha(*pos) || *pos == '_') {
+            // Pode ser uma variável temporária
+            const char* varStart = pos;
+            String varName = parseIdentifier(&pos);
+            
+            if (varName.length() > 0 && tempVariables && tempVarCount > 0) {
+                // Procura a variável temporária
+                bool found = false;
+                for (int i = 0; i < tempVarCount; i++) {
+                    if (strcmp(tempVariables[i].name, varName.c_str()) == 0) {
+                        // Encontrou a variável, substitui pelo valor
+                        char valueStr[32];
+                        snprintf(valueStr, sizeof(valueStr), "%.6f", tempVariables[i].value);
+                        
+                        // Remove zeros desnecessários no final
+                        size_t len = strlen(valueStr);
+                        while (len > 0 && valueStr[len - 1] == '0' && strchr(valueStr, '.') != nullptr) {
+                            valueStr[len - 1] = '\0';
+                            len--;
+                        }
+                        if (len > 0 && valueStr[len - 1] == '.') {
+                            valueStr[len - 1] = '\0';
+                            len--;
+                        }
+                        
+                        // Adiciona ao output
+                        size_t valueLen = strlen(valueStr);
+                        if (outputPos + valueLen >= outputSize - 1) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                            }
+                            return false;
+                        }
+                        strcpy(output + outputPos, valueStr);
+                        outputPos += valueLen;
+                        found = true;
+                        break;
+                    }
+                }
+                
+                if (!found) {
+                    // Não é variável temporária conhecida, copia o identificador
+                    size_t varLen = varName.length();
+                    if (outputPos + varLen >= outputSize - 1) {
+                        if (errorMsg && errorMsgSize > 0) {
+                            snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                        }
+                        return false;
+                    }
+                    strncpy(output + outputPos, varStart, varLen);
+                    outputPos += varLen;
+                    output[outputPos] = '\0';
+                }
+            } else {
+                // Não há variáveis temporárias ou não encontrou, copia o identificador
+                size_t varLen = varName.length();
+                if (outputPos + varLen >= outputSize - 1) {
+                    if (errorMsg && errorMsgSize > 0) {
+                        snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                    }
+                    return false;
+                }
+                strncpy(output + outputPos, varStart, varLen);
+                outputPos += varLen;
+                output[outputPos] = '\0';
+            }
         } else {
             // Caractere normal, copia
             if (outputPos >= outputSize - 1) {
@@ -679,6 +745,8 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
 bool parseAssignment(const char* expression, AssignmentInfo* assignmentInfo, char* errorMsg, size_t errorMsgSize) {
     // Inicializa estrutura
     assignmentInfo->hasAssignment = false;
+    assignmentInfo->isVariableAssignment = false;
+    assignmentInfo->targetVariable[0] = '\0';
     assignmentInfo->targetDeviceIndex = -1;
     assignmentInfo->targetRegisterIndex = -1;
     assignmentInfo->expression = nullptr;
@@ -735,13 +803,10 @@ bool parseAssignment(const char* expression, AssignmentInfo* assignmentInfo, cha
     destStr.trim();
     free(destPart);
     
-    // Verifica se o destino é do formato {d[i][j]}
-    if (destStr.length() < 6 || destStr.charAt(0) != '{' || destStr.charAt(1) != 'd' || destStr.charAt(2) != '[') {
-        if (errorMsg && errorMsgSize > 0) {
-            snprintf(errorMsg, errorMsgSize, "Erro: destino deve ser no formato {d[device][register]}");
-        }
-        return false;
-    }
+    // Verifica se o destino é do formato {d[i][j]} ou uma variável temporária (ex: a, b, x, etc)
+    if (destStr.length() >= 6 && destStr.charAt(0) == '{' && destStr.charAt(1) == 'd' && destStr.charAt(2) == '[') {
+        // É atribuição para {d[i][j]}
+        assignmentInfo->isVariableAssignment = false;
     
     // Extrai índices do destino
     int deviceIndex = -1;
@@ -784,6 +849,42 @@ bool parseAssignment(const char* expression, AssignmentInfo* assignmentInfo, cha
     
     assignmentInfo->targetDeviceIndex = deviceIndex;
     assignmentInfo->targetRegisterIndex = registerIndex;
+    } else {
+        // Verifica se é uma variável temporária (identificador válido)
+        // Remove espaços e verifica se é um identificador válido
+        destStr.trim();
+        bool isValidVar = true;
+        if (destStr.length() == 0 || destStr.length() >= 32) {
+            isValidVar = false;
+        } else {
+            // Verifica se começa com letra ou underscore
+            char firstChar = destStr.charAt(0);
+            if (!isalpha(firstChar) && firstChar != '_') {
+                isValidVar = false;
+            } else {
+                // Verifica se todos os caracteres são alfanuméricos ou underscore
+                for (int i = 1; i < destStr.length(); i++) {
+                    char c = destStr.charAt(i);
+                    if (!isalnum(c) && c != '_') {
+                        isValidVar = false;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (!isValidVar) {
+            if (errorMsg && errorMsgSize > 0) {
+                snprintf(errorMsg, errorMsgSize, "Erro: destino deve ser no formato {d[device][register]} ou uma variavel temporaria (ex: a, b, x)");
+            }
+            return false;
+        }
+        
+        // É atribuição para variável temporária
+        assignmentInfo->isVariableAssignment = true;
+        strncpy(assignmentInfo->targetVariable, destStr.c_str(), sizeof(assignmentInfo->targetVariable) - 1);
+        assignmentInfo->targetVariable[sizeof(assignmentInfo->targetVariable) - 1] = '\0';
+    }
     
     // Segunda parte: expressão (após o =)
     const char* exprStart = equalsPos + 1;
