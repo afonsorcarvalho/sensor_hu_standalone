@@ -78,3 +78,6 @@ temp/
 
 # ESP32 specific
 partitions.csv.bak
+
+# Cache
+.cache/
