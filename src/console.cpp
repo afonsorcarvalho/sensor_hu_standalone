@@ -144,6 +144,11 @@ void initConsoleWebSocket(AsyncWebSocket* ws) {
 void consolePrint(String message) {
     // Imprime na Serial também para debug
     Serial.print(message);
+    // Força envio imediato do buffer Serial para garantir que apareça no monitor
+    // Isso é importante porque o buffer pode não ser enviado automaticamente
+    if (message.indexOf('\n') >= 0 || message.length() > 50) {
+        Serial.flush(); // Flush quando há quebra de linha ou mensagens grandes
+    }
     
     // Adiciona mensagem ao buffer
     consoleBuffer += message;

@@ -29,56 +29,74 @@ void setupWiFiAP() {
 bool setupWiFiSTA() {
     // Verifica se há configuração STA válida
     if (strlen(config.wifi.staSSID) == 0) {
-        Serial.println("SSID STA nao configurado");
+        Serial.println("[WiFi] SSID STA nao configurado - usando modo AP");
         return false;
     }
     
-    Serial.println("Tentando conectar no modo Station...");
-    Serial.print("SSID: ");
-    Serial.println(config.wifi.staSSID);
+    Serial.println("[WiFi] Tentando conectar no modo Station (STA)...");
+    Serial.print("[WiFi] SSID: '");
+    Serial.print(config.wifi.staSSID);
+    Serial.print("', Senha length: ");
+    Serial.println(strlen(config.wifi.staPassword));
     
     // Configura modo Station
     WiFi.mode(WIFI_STA);
     WiFi.begin(config.wifi.staSSID, config.wifi.staPassword);
     
-    // Tenta conectar até 3 vezes
+    // Tenta conectar até 3 vezes (conforme solicitado)
     const int maxAttempts = 3;
     const int timeoutPerAttempt = 10000; // 10 segundos por tentativa
     
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-        Serial.print("Tentativa ");
+        Serial.print("[WiFi] Tentativa ");
         Serial.print(attempt);
         Serial.print(" de ");
-        Serial.println(maxAttempts);
+        Serial.print(maxAttempts);
+        Serial.print(" (timeout: ");
+        Serial.print(timeoutPerAttempt / 1000);
+        Serial.println("s)...");
         
         unsigned long startTime = millis();
+        int dotCount = 0;
         while (WiFi.status() != WL_CONNECTED && (millis() - startTime) < timeoutPerAttempt) {
             delay(500);
             Serial.print(".");
+            dotCount++;
+            if (dotCount % 20 == 0) {
+                Serial.println();
+            }
         }
         Serial.println();
         
         if (WiFi.status() == WL_CONNECTED) {
             IPAddress IP = WiFi.localIP();
-            Serial.println("Conectado com sucesso!");
-            Serial.print("IP: ");
+            Serial.println("[WiFi] Conectado com sucesso!");
+            Serial.print("[WiFi] IP: ");
             Serial.println(IP);
+            Serial.print("[WiFi] Gateway: ");
+            Serial.println(WiFi.gatewayIP());
+            Serial.print("[WiFi] Subnet: ");
+            Serial.println(WiFi.subnetMask());
             
             return true;
         } else {
-            Serial.print("Falha na tentativa ");
-            Serial.println(attempt);
+            Serial.print("[WiFi] Falha na tentativa ");
+            Serial.print(attempt);
+            Serial.print(" - Status: ");
+            Serial.println(WiFi.status());
             
             if (attempt < maxAttempts) {
-                Serial.println("Tentando novamente...");
+                Serial.println("[WiFi] Aguardando 1 segundo antes da proxima tentativa...");
                 WiFi.disconnect();
                 delay(1000);
+                Serial.println("[WiFi] Tentando novamente...");
                 WiFi.begin(config.wifi.staSSID, config.wifi.staPassword);
             }
         }
     }
     
-    Serial.println("Nao foi possivel conectar apos 3 tentativas");
+    Serial.println("[WiFi] Nao foi possivel conectar apos 3 tentativas");
+    Serial.println("[WiFi] Voltando para modo AP (fallback)");
     
     return false;
 }

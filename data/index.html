@@ -148,9 +148,56 @@
         .btn-warning { background: #ffc107; color: #212529; }
         .btn:hover { opacity: 0.9; transform: translateY(-1px); }
         .btn-small { padding: 4px 8px; font-size: 12px; }
-        .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
-        .status.success { background: #d4edda; color: #155724; }
-        .status.error { background: #f8d7da; color: #721c24; }
+        /* Toast notification */
+        .toast-container {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10000;
+            pointer-events: none;
+        }
+        .toast {
+            background: white;
+            color: #333;
+            padding: 16px 24px;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            min-width: 300px;
+            max-width: 500px;
+            text-align: center;
+            font-size: 16px;
+            font-weight: 500;
+            opacity: 0;
+            transform: translateY(-20px) scale(0.95);
+            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            pointer-events: auto;
+            border-left: 4px solid #007bff;
+        }
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        .toast.success {
+            border-left-color: #28a745;
+            background: #d4edda;
+            color: #155724;
+        }
+        .toast.error {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .toast.warning {
+            border-left-color: #ffc107;
+            background: #fff3cd;
+            color: #856404;
+        }
+        .toast.info {
+            border-left-color: #17a2b8;
+            background: #d1ecf1;
+            color: #0c5460;
+        }
         .config-group { margin: 15px 0; padding: 15px; border: 1px solid #ddd; border-radius: 4px; }
         .config-group label { display: block; margin: 8px 0; font-weight: bold; }
         .config-group input, .config-group select { width: 100%; max-width: 300px; }
@@ -162,7 +209,9 @@
     <div class="container">
         <div class="version">AFR Modbus Manager V0.1.0</div>
         <h1>Configuracao Sistema Modbus RTU Master</h1>
-        <div id="status"></div>
+        
+        <!-- Toast container -->
+        <div class="toast-container" id="toastContainer"></div>
         
         <div class="menu">
             <button class="menu-btn active" onclick="showSection('modbus')">Modbus</button>
@@ -416,11 +465,41 @@
         
         async function scanWiFi() {
             const resultsDiv = document.getElementById('wifiScanResults');
-            resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Escaneando redes...</p>';
+            resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Escaneando redes... (pode levar alguns segundos)</p>';
             
             try {
-                const response = await fetch('/api/wifi/scan');
+                // Cria um AbortController para timeout de 15 segundos
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+                
+                const response = await fetch('/api/wifi/scan', {
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                // Verifica se a resposta é válida (aceita HTTP 200 mesmo com erro no JSON)
+                if (!response.ok && response.status !== 200) {
+                    throw new Error(`Erro HTTP: ${response.status} ${response.statusText}`);
+                }
+                
+                // Verifica se o conteúdo é JSON
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    throw new Error(`Resposta não é JSON: ${text.substring(0, 100)}`);
+                }
+                
                 const data = await response.json();
+                
+                // Verifica se há erro no JSON (mesmo com HTTP 200)
+                if (data.status === 'error') {
+                    resultsDiv.innerHTML = '<p style="color: #F44336; text-align: center; padding: 20px;">Erro: ' + escapeHtml(data.message || 'Erro desconhecido') + '</p>';
+                    if (data.timeout) {
+                        console.warn('Timeout no scan WiFi:', data.message);
+                    }
+                    return;
+                }
                 
                 if (data.status === 'success' && data.networks && data.networks.length > 0) {
                     let html = '<table style="width: 100%; border-collapse: collapse;">';
@@ -459,11 +538,25 @@
                     html += '</tbody></table>';
                     html += '<p style="text-align: center; color: #666; margin-top: 10px; font-size: 12px;">Total: ' + data.count + ' redes encontradas</p>';
                     resultsDiv.innerHTML = html;
+                } else if (data.status === 'no_networks') {
+                    resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Nenhuma rede encontrada</p>';
+                } else if (data.status === 'error') {
+                    resultsDiv.innerHTML = '<p style="color: #F44336; text-align: center; padding: 20px;">Erro: ' + (data.message || 'Erro desconhecido') + '</p>';
                 } else {
                     resultsDiv.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">Nenhuma rede encontrada</p>';
                 }
             } catch (error) {
-                resultsDiv.innerHTML = '<p style="color: #F44336; text-align: center; padding: 20px;">Erro ao escanear redes: ' + error + '</p>';
+                let errorMessage = 'Erro desconhecido';
+                
+                if (error.name === 'AbortError') {
+                    errorMessage = 'Timeout: O scan demorou mais de 15 segundos. O ESP32 pode ter reiniciado. Tente novamente.';
+                } else if (error.message) {
+                    errorMessage = error.message;
+                } else if (typeof error === 'string') {
+                    errorMessage = error;
+                }
+                
+                resultsDiv.innerHTML = '<p style="color: #F44336; text-align: center; padding: 20px;">Erro ao escanear redes: ' + escapeHtml(errorMessage) + '</p>';
                 console.error('Erro ao escanear WiFi:', error);
             }
         }
@@ -482,10 +575,35 @@
 
         function showStatus(message, isError) {
             isError = isError || false;
-            const status = document.getElementById('status');
-            status.className = 'status ' + (isError ? 'error' : 'success');
-            status.textContent = message;
-            setTimeout(function() { status.textContent = ''; }, 3000);
+            const toastContainer = document.getElementById('toastContainer');
+            
+            // Remove toast anterior se existir
+            const existingToast = toastContainer.querySelector('.toast');
+            if (existingToast) {
+                existingToast.classList.remove('show');
+                setTimeout(() => existingToast.remove(), 300);
+            }
+            
+            // Cria novo toast
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + (isError ? 'error' : 'success');
+            toast.textContent = message;
+            toastContainer.appendChild(toast);
+            
+            // Anima entrada
+            setTimeout(() => {
+                toast.classList.add('show');
+            }, 10);
+            
+            // Remove após 3 segundos
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.remove();
+                    }
+                }, 300);
+            }, 3000);
         }
         
         function addDevice() {
@@ -823,22 +941,105 @@
         async function saveAndReboot() {
             try {
                 // Primeiro salva a configuração
-                await saveAllConfig();
+                const saveResponse = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        baudRate: parseInt(document.getElementById('baudRate').value),
+                        deviceCount: devices.length,
+                        devices: devices,
+                        mqtt: {
+                            enabled: document.getElementById('mqttEnabled').checked,
+                            server: document.getElementById('mqttServer').value,
+                            port: parseInt(document.getElementById('mqttPort').value) || 1883,
+                            user: document.getElementById('mqttUser').value,
+                            password: document.getElementById('mqttPassword').value,
+                            topic: document.getElementById('mqttTopic').value,
+                            interval: parseInt(document.getElementById('mqttInterval').value) || 60
+                        },
+                        wifi: {
+                            mode: document.getElementById('wifiMode').value,
+                            apSSID: document.getElementById('apSSID').value,
+                            apPassword: document.getElementById('apPassword').value,
+                            staSSID: document.getElementById('staSSID').value,
+                            staPassword: document.getElementById('staPassword').value
+                        },
+                        rtc: {
+                            enabled: document.getElementById('rtcEnabled').checked,
+                            timezone: parseInt(document.getElementById('rtcTimezone').value),
+                            ntpServer: document.getElementById('ntpServer').value,
+                            ntpEnabled: document.getElementById('ntpEnabled').checked,
+                            date: document.getElementById('rtcDate').value,
+                            time: document.getElementById('rtcTime').value
+                        },
+                        calculationCode: document.getElementById('calculationCode').value
+                    })
+                });
                 
-                // Aguarda um pouco para garantir que salvou
-                await new Promise(resolve => setTimeout(resolve, 500));
+                // Verifica se a resposta é válida
+                if (!saveResponse.ok) {
+                    let errorText = 'Erro HTTP: ' + saveResponse.status;
+                    try {
+                        const errorData = await saveResponse.json();
+                        if (errorData.error) {
+                            errorText = errorData.error;
+                        }
+                    } catch (e) {
+                        // Ignora erro ao parsear JSON
+                    }
+                    showStatus('Erro ao salvar configuração: ' + errorText, true);
+                    console.error('Erro ao salvar:', saveResponse.status, saveResponse.statusText);
+                    return;
+                }
+                
+                // Verifica se a resposta é JSON válido
+                let saveData;
+                try {
+                    saveData = await saveResponse.json();
+                } catch (error) {
+                    showStatus('Erro ao processar resposta do servidor', true);
+                    console.error('Erro ao parsear JSON:', error);
+                    return;
+                }
+                
+                // Verifica se houve erro no JSON
+                if (saveData.error) {
+                    showStatus('Erro ao salvar: ' + saveData.error, true);
+                    return;
+                }
+                
+                // Mostra mensagem de sucesso
+                showStatus('Configuração salva com sucesso!', false);
+                
+                // Aguarda um pouco para o usuário ver a mensagem
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 
                 // Solicita reboot
-                const response = await fetch('/api/reboot', {
+                const rebootResponse = await fetch('/api/reboot', {
                     method: 'POST'
                 });
                 
-                if (response.ok) {
-                    showStatus('Configuracao salva! Reiniciando...', false);
-                    // A página será recarregada quando o ESP32 reiniciar
+                if (rebootResponse.ok) {
+                    const data = await rebootResponse.json();
+                    // Mostra mensagem de reinicialização
+                    showStatus('Configuração salva! Reiniciando em 10 segundos...', false);
+                    
+                    // Conta regressiva visual
+                    let countdown = 10;
+                    const countdownInterval = setInterval(() => {
+                        countdown--;
+                        if (countdown > 0) {
+                            showStatus('Configuração salva! Reiniciando em ' + countdown + ' segundos...', false);
+                        } else {
+                            clearInterval(countdownInterval);
+                            showStatus('Reiniciando agora...', false);
+                        }
+                    }, 1000);
+                    
+                    // Tenta recarregar a página após 12 segundos (dá tempo para o ESP32 reiniciar)
                     setTimeout(() => {
                         window.location.reload();
-                    }, 3000);
+                    }, 12000);
                 } else {
                     showStatus('Erro ao reiniciar', true);
                 }

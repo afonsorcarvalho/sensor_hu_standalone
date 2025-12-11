@@ -146,20 +146,8 @@ void readAllDevices() {
                             " (" + varName + "): " + 
                             String(processedValue, 2) + 
                             " (raw: " + String(config.devices[i].registers[j].value) + ")\r\n";
+                // consolePrint já imprime no Serial e no WebSocket, não precisa duplicar
                 consolePrint(msg);
-                
-                // Também mostra no Serial para debug
-                Serial.print("[Modbus] Dev ");
-                Serial.print(slaveAddr);
-                Serial.print(" Reg ");
-                Serial.print(regAddr);
-                Serial.print(" (");
-                Serial.print(varName);
-                Serial.print("): ");
-                Serial.print(processedValue, 2);
-                Serial.print(" (raw: ");
-                Serial.print(config.devices[i].registers[j].value);
-                Serial.println(")");
             } else {
                 // Em caso de erro, mantém o valor anterior ou zera
                 String varName = strlen(config.devices[i].registers[j].variableName) > 0 
@@ -183,17 +171,8 @@ void readAllDevices() {
                 String msg = "[Modbus ERRO] Dev " + String(slaveAddr) + 
                             " Reg " + String(regAddr) + 
                             " (" + varName + "): " + errorDesc + "\r\n";
+                // consolePrint já imprime no Serial e no WebSocket, não precisa duplicar
                 consolePrint(msg);
-                
-                // Também mostra no Serial para debug
-                Serial.print("[Modbus ERRO] Dev ");
-                Serial.print(slaveAddr);
-                Serial.print(" Reg ");
-                Serial.print(regAddr);
-                Serial.print(" (");
-                Serial.print(varName);
-                Serial.print("): ");
-                Serial.println(errorDesc);
             }
             
             delay(50); // Delay para garantir resposta antes da próxima leitura

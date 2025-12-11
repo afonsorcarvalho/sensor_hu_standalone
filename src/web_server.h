@@ -74,6 +74,14 @@ void handleSyncNTP(AsyncWebServerRequest *request);
 void handleWiFiScan(AsyncWebServerRequest *request);
 
 /**
+ * @brief Restaura o estado WiFi original após operações como scan
+ * @param originalMode Modo WiFi original (AP, STA, AP_STA)
+ * @param wasConnected Se estava conectado a uma rede antes
+ * @param originalSSID SSID da rede original (se estava conectado)
+ */
+void restoreWiFiState(WiFiMode_t originalMode, bool wasConnected, const String& originalSSID);
+
+/**
  * @brief Handler para testar cálculo/expressão (POST /api/calc/test)
  */
 void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t len);

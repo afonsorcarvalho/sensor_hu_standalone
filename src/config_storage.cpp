@@ -107,7 +107,10 @@ void loadConfig() {
     if (doc.containsKey("wifi")) {
         JsonObject wifiObj = doc["wifi"];
         const char* modeStr = wifiObj["mode"] | "ap";
-        strncpy(config.wifi.mode, modeStr, sizeof(config.wifi.mode) - 1);
+        // Normaliza o modo para minúsculas para evitar problemas de comparação
+        String modeStrLower = String(modeStr);
+        modeStrLower.toLowerCase();
+        strncpy(config.wifi.mode, modeStrLower.c_str(), sizeof(config.wifi.mode) - 1);
         config.wifi.mode[sizeof(config.wifi.mode) - 1] = '\0';
         
         const char* apSSIDStr = wifiObj["apSSID"] | AP_SSID;
@@ -125,6 +128,13 @@ void loadConfig() {
         const char* staPasswordStr = wifiObj["staPassword"] | "";
         strncpy(config.wifi.staPassword, staPasswordStr, sizeof(config.wifi.staPassword) - 1);
         config.wifi.staPassword[sizeof(config.wifi.staPassword) - 1] = '\0';
+        
+        Serial.print("WiFi carregado - Mode: '");
+        Serial.print(config.wifi.mode);
+        Serial.print("', STA SSID: '");
+        Serial.print(config.wifi.staSSID);
+        Serial.print("', STA Password length: ");
+        Serial.println(strlen(config.wifi.staPassword));
     }
     
     // Carrega configuração RTC

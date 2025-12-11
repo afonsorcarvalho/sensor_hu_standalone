@@ -14,6 +14,9 @@
 #include <ESP.h>
 #include <WiFi.h>
 #include <math.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_task_wdt.h"
 
 // Variáveis globais
 AsyncWebServer server(WEB_SERVER_PORT);
@@ -53,9 +56,30 @@ void setupWebServer() {
     });
     
     // Rota para importar configurações (deve vir antes de /api/config)
-    server.on("/api/config/import", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    // Usa handler de body para acumular todos os chunks antes de processar
+    server.on("/api/config/import", HTTP_POST,
+        [](AsyncWebServerRequest *request){
+            // Handler de início - inicializa buffer se necessário
+            request->_tempObject = new String();
+        },
+        NULL,  // onUpload - não usado
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-            handleImportConfig(request, data, len);
+            // Handler de body - acumula chunks
+            if (request->_tempObject) {
+                String* bodyBuffer = (String*)request->_tempObject;
+                // Adiciona chunk atual ao buffer
+                for (size_t i = 0; i < len; i++) {
+                    *bodyBuffer += (char)data[i];
+                }
+                
+                // Se recebeu todos os chunks (este é o último chunk), processa
+                // Verifica se recebemos todos os bytes esperados
+                if (index + len >= total && bodyBuffer->length() >= total) {
+                    handleImportConfig(request, (uint8_t*)bodyBuffer->c_str(), bodyBuffer->length());
+                    delete bodyBuffer;
+                    request->_tempObject = nullptr;
+                }
+            }
         });
     
     // Rota para obter configuração atual (JSON)
@@ -64,9 +88,111 @@ void setupWebServer() {
     });
     
     // Rota para salvar nova configuração (POST JSON)
-    server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+    // Usa handler de body para acumular todos os chunks antes de processar
+    server.on("/api/config", HTTP_POST, 
+        [](AsyncWebServerRequest *request){
+            // Handler de início - inicializa buffer se necessário
+            Serial.println("[Config] POST /api/config recebido");
+            
+            // Verifica se há Content-Length
+            if (request->hasHeader("Content-Length")) {
+                const AsyncWebHeader* header = request->getHeader("Content-Length");
+                if (header) {
+                    int contentLength = atoi(header->value().c_str());
+                    Serial.print("[Config] Content-Length: ");
+                    Serial.println(contentLength);
+                    if (contentLength > 0) {
+                        request->_tempObject = new String();
+                        // Reserva espaço para evitar realocações
+                        ((String*)request->_tempObject)->reserve(contentLength + 1);
+                        Serial.println("[Config] Buffer inicializado");
+                    } else {
+                        // Body vazio - retorna erro imediatamente
+                        Serial.println("[Config] Body vazio - retornando erro");
+                        request->send(400, "application/json", "{\"error\":\"Body vazio\"}");
+                        return;
+                    }
+                } else {
+                    // Header não encontrado - inicializa buffer de qualquer forma
+                    Serial.println("[Config] Header Content-Length não encontrado - inicializando buffer");
+                    request->_tempObject = new String();
+                }
+            } else {
+                // Sem Content-Length - pode ser que não haja body
+                // Inicializa buffer de qualquer forma
+                Serial.println("[Config] Sem Content-Length - inicializando buffer");
+                request->_tempObject = new String();
+            }
+        },
+        NULL,  // onUpload - não usado
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-            handleSaveConfig(request, data, len);
+            // Handler de body - acumula chunks
+            Serial.print("[Config] Body handler chamado: len=");
+            Serial.print(len);
+            Serial.print(", index=");
+            Serial.print(index);
+            Serial.print(", total=");
+            Serial.println(total);
+            
+            // Se total é 0, não há body - retorna erro
+            if (total == 0) {
+                Serial.println("[Config] ERRO: total é 0 - sem body");
+                request->send(400, "application/json", "{\"error\":\"Body vazio\"}");
+                return;
+            }
+            
+            // IMPORTANTE: O handler de body pode ser chamado ANTES do handler de request
+            // Então precisamos inicializar o buffer aqui se ele não existir
+            if (!request->_tempObject) {
+                Serial.println("[Config] Buffer não inicializado - inicializando no handler de body");
+                request->_tempObject = new String();
+                // Reserva espaço baseado no total esperado
+                ((String*)request->_tempObject)->reserve(total + 1);
+            }
+            
+            if (request->_tempObject) {
+                String* bodyBuffer = (String*)request->_tempObject;
+                // Adiciona chunk atual ao buffer
+                for (size_t i = 0; i < len; i++) {
+                    *bodyBuffer += (char)data[i];
+                }
+                
+                // Debug: mostra progresso (apenas a cada 500 bytes ou no último chunk)
+                if (bodyBuffer->length() % 500 < 100 || index + len >= total) {
+                    Serial.print("[Config] Chunk: index=");
+                    Serial.print(index);
+                    Serial.print(", len=");
+                    Serial.print(len);
+                    Serial.print(", total=");
+                    Serial.print(total);
+                    Serial.print(", buffer=");
+                    Serial.println(bodyBuffer->length());
+                }
+                
+                // Verifica se recebeu todos os chunks
+                // O AsyncWebServer pode chamar múltiplas vezes, então verificamos se:
+                // 1. Este é o último chunk (index + len >= total)
+                // 2. O buffer tem pelo menos o tamanho total esperado
+                // 3. Ainda não processamos (request->_tempObject não é nullptr)
+                if (index + len >= total && bodyBuffer->length() >= total && request->_tempObject != nullptr) {
+                    Serial.print("[Config] Todos os chunks recebidos. Processando JSON de ");
+                    Serial.print(bodyBuffer->length());
+                    Serial.println(" bytes");
+                    
+                    // Processa a configuração (handleSaveConfig envia a resposta)
+                    handleSaveConfig(request, (uint8_t*)bodyBuffer->c_str(), bodyBuffer->length());
+                    
+                    // Limpa o buffer
+                    delete bodyBuffer;
+                    request->_tempObject = nullptr;
+                }
+                // Se ainda estamos recebendo chunks, apenas continua acumulando
+                // Não precisa fazer nada aqui - o AsyncWebServer continuará chamando este handler
+            } else {
+                // request->_tempObject é nullptr mesmo após tentar inicializar - erro crítico
+                Serial.println("[Config] ERRO CRÍTICO: Não foi possível inicializar buffer");
+                request->send(500, "application/json", "{\"error\":\"Erro interno: falha ao inicializar buffer\"}");
+            }
         });
     
     // Rota para leitura manual de registros
@@ -204,224 +330,366 @@ void handleGetConfig(AsyncWebServerRequest *request) {
 }
 
 void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
-    if (data && len > 0) {
-        String body = String((char*)data);
-        
-        // Tamanho aumentado para suportar muitos dispositivos e registros
-        DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
-        DeserializationError error = deserializeJson(doc, body);
-        
-        if (error) {
-            Serial.print("Erro ao deserializar JSON: ");
-            Serial.println(error.c_str());
-            Serial.print("Tamanho do body recebido: ");
-            Serial.print(body.length());
-            Serial.println(" bytes");
-            request->send(400, "application/json", "{\"error\":\"JSON inválido\"}");
-            return;
-        }
-        
-        // Log para debug
-        Serial.print("JSON recebido com sucesso. Tamanho: ");
+    Serial.println("[Config] handleSaveConfig chamado");
+    Serial.print("[Config] Dados recebidos: len=");
+    Serial.print(len);
+    Serial.println(" bytes");
+    
+    if (!data || len == 0) {
+        Serial.println("[Config] ERRO: Dados vazios ou nulos");
+        request->send(400, "application/json", "{\"error\":\"Dados não fornecidos\"}");
+        return;
+    }
+    
+    // Cria string do body (garante terminação nula)
+    String body;
+    body.reserve(len + 1);  // Reserva espaço para evitar realocações
+    for (size_t i = 0; i < len; i++) {
+        body += (char)data[i];
+    }
+    
+    Serial.print("[Config] Body criado: ");
+    Serial.print(body.length());
+    Serial.println(" caracteres");
+    
+    // Verifica se o JSON parece válido (começa com { e termina com })
+    if (body.length() < 2 || body.charAt(0) != '{' || body.charAt(body.length() - 1) != '}') {
+        Serial.println("[Config] ERRO: JSON não parece válido (não começa/termina com {})");
+        Serial.print("[Config] Primeiros 100 caracteres: ");
+        Serial.println(body.substring(0, 100));
+        request->send(400, "application/json", "{\"error\":\"JSON inválido - formato incorreto\"}");
+        return;
+    }
+    
+    // Tamanho aumentado para suportar muitos dispositivos e registros
+    DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+        Serial.print("[Config] ERRO ao deserializar JSON: ");
+        Serial.println(error.c_str());
+        Serial.print("[Config] Tamanho do body: ");
         Serial.print(body.length());
         Serial.println(" bytes");
+        Serial.print("[Config] Primeiros 200 caracteres: ");
+        Serial.println(body.substring(0, 200));
+        Serial.print("[Config] Últimos 200 caracteres: ");
+        int start = (body.length() > 200) ? body.length() - 200 : 0;
+        Serial.println(body.substring(start));
         
-        // Atualiza configuração do sistema
-        uint32_t newBaudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
-        config.baudRate = newBaudRate;
+        String errorMsg = "{\"error\":\"JSON inválido: ";
+        errorMsg += error.c_str();
+        errorMsg += "\"}";
+        request->send(400, "application/json", errorMsg);
+        return;
+    }
+    
+    Serial.println("[Config] JSON deserializado com sucesso");
+    
+    // Log para debug
+    Serial.print("[Config] JSON recebido com sucesso. Tamanho: ");
+    Serial.print(body.length());
+    Serial.println(" bytes");
+    
+    // Atualiza configuração do sistema
+    uint32_t newBaudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
+    config.baudRate = newBaudRate;
+    
+    // Se o baud rate mudou, reconfigura o Modbus
+    if (newBaudRate != currentBaudRate) {
+        setupModbus(newBaudRate);
+    }
+    
+    // Atualiza configuração MQTT
+    if (doc.containsKey("mqtt")) {
+        JsonObject mqttObj = doc["mqtt"];
+        config.mqtt.enabled = mqttObj["enabled"] | false;
+        strncpy(config.mqtt.server, mqttObj["server"] | "", sizeof(config.mqtt.server) - 1);
+        config.mqtt.port = mqttObj["port"] | 1883;
+        strncpy(config.mqtt.user, mqttObj["user"] | "", sizeof(config.mqtt.user) - 1);
+        strncpy(config.mqtt.password, mqttObj["password"] | "", sizeof(config.mqtt.password) - 1);
+        strncpy(config.mqtt.topic, mqttObj["topic"] | "esp32/modbus", sizeof(config.mqtt.topic) - 1);
+        config.mqtt.interval = mqttObj["interval"] | 60;
+    }
+    
+    // Atualiza configuração WiFi
+    if (doc.containsKey("wifi")) {
+        JsonObject wifiObj = doc["wifi"];
         
-        // Se o baud rate mudou, reconfigura o Modbus
-        if (newBaudRate != currentBaudRate) {
-            setupModbus(newBaudRate);
+        // Processa modo WiFi com validação e normalização para minúsculas
+        if (wifiObj.containsKey("mode") && wifiObj["mode"].is<const char*>()) {
+            const char* modeStr = wifiObj["mode"].as<const char*>();
+            if (modeStr && strlen(modeStr) > 0) {
+                // Normaliza para minúsculas para evitar problemas de comparação
+                String modeStrLower = String(modeStr);
+                modeStrLower.toLowerCase();
+                strncpy(config.wifi.mode, modeStrLower.c_str(), sizeof(config.wifi.mode) - 1);
+                config.wifi.mode[sizeof(config.wifi.mode) - 1] = '\0';
+            } else {
+                strcpy(config.wifi.mode, "ap");
+            }
+        } else {
+            strcpy(config.wifi.mode, "ap");
         }
         
-        // Atualiza configuração MQTT
-        if (doc.containsKey("mqtt")) {
-            JsonObject mqttObj = doc["mqtt"];
-            config.mqtt.enabled = mqttObj["enabled"] | false;
-            strncpy(config.mqtt.server, mqttObj["server"] | "", sizeof(config.mqtt.server) - 1);
-            config.mqtt.port = mqttObj["port"] | 1883;
-            strncpy(config.mqtt.user, mqttObj["user"] | "", sizeof(config.mqtt.user) - 1);
-            strncpy(config.mqtt.password, mqttObj["password"] | "", sizeof(config.mqtt.password) - 1);
-            strncpy(config.mqtt.topic, mqttObj["topic"] | "esp32/modbus", sizeof(config.mqtt.topic) - 1);
-            config.mqtt.interval = mqttObj["interval"] | 60;
+        // Processa AP SSID com validação
+        if (wifiObj.containsKey("apSSID") && wifiObj["apSSID"].is<const char*>()) {
+            const char* apSSIDStr = wifiObj["apSSID"].as<const char*>();
+            if (apSSIDStr) {
+                strncpy(config.wifi.apSSID, apSSIDStr, sizeof(config.wifi.apSSID) - 1);
+                config.wifi.apSSID[sizeof(config.wifi.apSSID) - 1] = '\0';
+            } else {
+                strcpy(config.wifi.apSSID, AP_SSID);
+            }
+        } else {
+            strcpy(config.wifi.apSSID, AP_SSID);
         }
         
-        // Atualiza configuração WiFi
-        if (doc.containsKey("wifi")) {
-            JsonObject wifiObj = doc["wifi"];
-            const char* modeStr = wifiObj["mode"] | "ap";
-            strncpy(config.wifi.mode, modeStr, sizeof(config.wifi.mode) - 1);
-            config.wifi.mode[sizeof(config.wifi.mode) - 1] = '\0';
-            
-            const char* apSSIDStr = wifiObj["apSSID"] | AP_SSID;
-            strncpy(config.wifi.apSSID, apSSIDStr, sizeof(config.wifi.apSSID) - 1);
-            config.wifi.apSSID[sizeof(config.wifi.apSSID) - 1] = '\0';
-            
-            const char* apPasswordStr = wifiObj["apPassword"] | AP_PASSWORD;
-            strncpy(config.wifi.apPassword, apPasswordStr, sizeof(config.wifi.apPassword) - 1);
-            config.wifi.apPassword[sizeof(config.wifi.apPassword) - 1] = '\0';
-            
-            const char* staSSIDStr = wifiObj["staSSID"] | "";
-            strncpy(config.wifi.staSSID, staSSIDStr, sizeof(config.wifi.staSSID) - 1);
-            config.wifi.staSSID[sizeof(config.wifi.staSSID) - 1] = '\0';
-            
-            const char* staPasswordStr = wifiObj["staPassword"] | "";
-            strncpy(config.wifi.staPassword, staPasswordStr, sizeof(config.wifi.staPassword) - 1);
-            config.wifi.staPassword[sizeof(config.wifi.staPassword) - 1] = '\0';
+        // Processa AP Password com validação
+        if (wifiObj.containsKey("apPassword") && wifiObj["apPassword"].is<const char*>()) {
+            const char* apPasswordStr = wifiObj["apPassword"].as<const char*>();
+            if (apPasswordStr) {
+                strncpy(config.wifi.apPassword, apPasswordStr, sizeof(config.wifi.apPassword) - 1);
+                config.wifi.apPassword[sizeof(config.wifi.apPassword) - 1] = '\0';
+            } else {
+                strcpy(config.wifi.apPassword, AP_PASSWORD);
+            }
+        } else {
+            strcpy(config.wifi.apPassword, AP_PASSWORD);
         }
         
-        // Atualiza configuração RTC
-        if (doc.containsKey("rtc")) {
-            JsonObject rtcObj = doc["rtc"];
-            config.rtc.enabled = rtcObj["enabled"] | false;
-            config.rtc.timezone = rtcObj["timezone"] | -3;
-            const char* ntpServerStr = rtcObj["ntpServer"] | "pool.ntp.org";
-            strncpy(config.rtc.ntpServer, ntpServerStr, sizeof(config.rtc.ntpServer) - 1);
-            config.rtc.ntpServer[sizeof(config.rtc.ntpServer) - 1] = '\0';
-            config.rtc.ntpEnabled = rtcObj["ntpEnabled"] | true;
+        // Processa STA SSID com validação
+        if (wifiObj.containsKey("staSSID") && wifiObj["staSSID"].is<const char*>()) {
+            const char* staSSIDStr = wifiObj["staSSID"].as<const char*>();
+            if (staSSIDStr) {
+                strncpy(config.wifi.staSSID, staSSIDStr, sizeof(config.wifi.staSSID) - 1);
+                config.wifi.staSSID[sizeof(config.wifi.staSSID) - 1] = '\0';
+            } else {
+                config.wifi.staSSID[0] = '\0';
+            }
+        } else {
+            config.wifi.staSSID[0] = '\0';
         }
         
-        // Atualiza código de cálculo
-        if (doc.containsKey("calculationCode")) {
-            const char* code = doc["calculationCode"] | "";
-            strncpy(config.calculationCode, code, sizeof(config.calculationCode) - 1);
-            config.calculationCode[sizeof(config.calculationCode) - 1] = '\0';
+        // Processa STA Password com validação
+        if (wifiObj.containsKey("staPassword") && wifiObj["staPassword"].is<const char*>()) {
+            const char* staPasswordStr = wifiObj["staPassword"].as<const char*>();
+            if (staPasswordStr) {
+                strncpy(config.wifi.staPassword, staPasswordStr, sizeof(config.wifi.staPassword) - 1);
+                config.wifi.staPassword[sizeof(config.wifi.staPassword) - 1] = '\0';
+            } else {
+                config.wifi.staPassword[0] = '\0';
+            }
+        } else {
+            config.wifi.staPassword[0] = '\0';
         }
         
-        config.deviceCount = doc["deviceCount"] | 0;
-        if (config.deviceCount > MAX_DEVICES) {
-            config.deviceCount = MAX_DEVICES;
+        Serial.print("[Config] WiFi configurado - Mode: '");
+        Serial.print(config.wifi.mode);
+        Serial.print("', AP SSID: '");
+        Serial.print(config.wifi.apSSID);
+        Serial.print("', STA SSID: '");
+        Serial.print(config.wifi.staSSID);
+        Serial.print("', STA Password length: ");
+        Serial.println(strlen(config.wifi.staPassword));
+    }
+    
+    // Atualiza configuração RTC
+    if (doc.containsKey("rtc")) {
+        JsonObject rtcObj = doc["rtc"];
+        config.rtc.enabled = rtcObj["enabled"] | false;
+        config.rtc.timezone = rtcObj["timezone"] | -3;
+        const char* ntpServerStr = rtcObj["ntpServer"] | "pool.ntp.org";
+        strncpy(config.rtc.ntpServer, ntpServerStr, sizeof(config.rtc.ntpServer) - 1);
+        config.rtc.ntpServer[sizeof(config.rtc.ntpServer) - 1] = '\0';
+        config.rtc.ntpEnabled = rtcObj["ntpEnabled"] | true;
+    }
+    
+    // Atualiza código de cálculo
+    if (doc.containsKey("calculationCode")) {
+        const char* code = doc["calculationCode"] | "";
+        strncpy(config.calculationCode, code, sizeof(config.calculationCode) - 1);
+        config.calculationCode[sizeof(config.calculationCode) - 1] = '\0';
+    }
+    
+    config.deviceCount = doc["deviceCount"] | 0;
+    if (config.deviceCount > MAX_DEVICES) {
+        config.deviceCount = MAX_DEVICES;
+    }
+    
+    // Verifica se há array de dispositivos
+    if (!doc.containsKey("devices") || !doc["devices"].is<JsonArray>()) {
+        Serial.println("[Config] ERRO: Array de dispositivos nao encontrado no JSON recebido");
+        request->send(400, "application/json", "{\"error\":\"Array de dispositivos não encontrado\"}");
+        return;
+    }
+    
+    JsonArray devicesArray = doc["devices"].as<JsonArray>();
+    int deviceCountFromJson = devicesArray.size();
+    
+    Serial.print("[Config] Dispositivos recebidos no JSON: ");
+    Serial.println(deviceCountFromJson);
+    
+    for (int i = 0; i < config.deviceCount && i < MAX_DEVICES && i < deviceCountFromJson; i++) {
+        JsonObject deviceObj = devicesArray[i];
+        if (!deviceObj) {
+            Serial.print("[Config] AVISO: Dispositivo ");
+            Serial.print(i);
+            Serial.println(" nao encontrado no JSON");
+            continue;
         }
         
-        // Verifica se há array de dispositivos
-        if (!doc.containsKey("devices") || !doc["devices"].is<JsonArray>()) {
-            Serial.println("ERRO: Array de dispositivos nao encontrado no JSON recebido");
-            request->send(400, "application/json", "{\"error\":\"Array de dispositivos não encontrado\"}");
-            return;
+        config.devices[i].slaveAddress = deviceObj["slaveAddress"] | 1;
+        config.devices[i].enabled = deviceObj["enabled"] | true;
+        
+        // Carrega nome do dispositivo
+        const char* devName = deviceObj["deviceName"] | "";
+        strncpy(config.devices[i].deviceName, devName, sizeof(config.devices[i].deviceName) - 1);
+        config.devices[i].deviceName[sizeof(config.devices[i].deviceName) - 1] = '\0';
+        
+        // Verifica se há array de registros
+        if (!deviceObj.containsKey("registers") || !deviceObj["registers"].is<JsonArray>()) {
+            Serial.print("[Config] AVISO: Array de registros nao encontrado para dispositivo ");
+            Serial.println(i);
+            config.devices[i].registerCount = 0;
+            continue;
         }
         
-        JsonArray devicesArray = doc["devices"].as<JsonArray>();
-        int deviceCountFromJson = devicesArray.size();
+        JsonArray registersArray = deviceObj["registers"].as<JsonArray>();
+        int registerCountFromJson = registersArray.size();
         
-        Serial.print("Dispositivos recebidos no JSON: ");
-        Serial.println(deviceCountFromJson);
+        // IMPORTANTE: registerCount deve ser baseado no tamanho real do array de registros
+        config.devices[i].registerCount = registerCountFromJson;
         
-        for (int i = 0; i < config.deviceCount && i < MAX_DEVICES && i < deviceCountFromJson; i++) {
-            JsonObject deviceObj = devicesArray[i];
-            if (!deviceObj) {
-                Serial.print("AVISO: Dispositivo ");
+        // Limita ao máximo permitido
+        if (config.devices[i].registerCount > MAX_REGISTERS_PER_DEVICE) {
+            config.devices[i].registerCount = MAX_REGISTERS_PER_DEVICE;
+        }
+        
+        Serial.print("[Config] Processando dispositivo ");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.print(config.devices[i].registerCount);
+        Serial.println(" registros");
+        
+        for (int j = 0; j < config.devices[i].registerCount && j < registerCountFromJson; j++) {
+            JsonObject regObj = registersArray[j];
+            if (!regObj) {
+                Serial.print("[Config] AVISO: Registro ");
+                Serial.print(j);
+                Serial.print(" do dispositivo ");
                 Serial.print(i);
                 Serial.println(" nao encontrado no JSON");
                 continue;
             }
             
-            config.devices[i].slaveAddress = deviceObj["slaveAddress"] | 1;
-            config.devices[i].enabled = deviceObj["enabled"] | true;
+            config.devices[i].registers[j].address = regObj["address"] | 0;
+            config.devices[i].registers[j].isInput = regObj["isInput"] | true;
+            config.devices[i].registers[j].isOutput = regObj["isOutput"] | false;
+            config.devices[i].registers[j].readOnly = regObj["readOnly"] | false;
             
-            // Carrega nome do dispositivo
-            const char* devName = deviceObj["deviceName"] | "";
-            strncpy(config.devices[i].deviceName, devName, sizeof(config.devices[i].deviceName) - 1);
-            config.devices[i].deviceName[sizeof(config.devices[i].deviceName) - 1] = '\0';
+            // IMPORTANTE: Inicializa valor com 0 mesmo sem leitura do dispositivo
+            // Isso garante que a variável existe e pode ser usada nas expressões
+            config.devices[i].registers[j].value = 0;
             
-            // Verifica se há array de registros
-            if (!deviceObj.containsKey("registers") || !deviceObj["registers"].is<JsonArray>()) {
-                Serial.print("AVISO: Array de registros nao encontrado para dispositivo ");
-                Serial.println(i);
-                config.devices[i].registerCount = 0;
-                continue;
+            // Carrega nome da variável
+            const char* varName = regObj["variableName"] | "";
+            strncpy(config.devices[i].registers[j].variableName, varName, sizeof(config.devices[i].registers[j].variableName) - 1);
+            config.devices[i].registers[j].variableName[sizeof(config.devices[i].registers[j].variableName) - 1] = '\0';
+            
+            // Carrega ganho e offset (valores padrão se não especificados) com validação
+            if (regObj.containsKey("gain") && regObj["gain"].is<float>()) {
+                config.devices[i].registers[j].gain = regObj["gain"].as<float>();
+            } else {
+                config.devices[i].registers[j].gain = 1.0f;
             }
             
-            JsonArray registersArray = deviceObj["registers"].as<JsonArray>();
-            int registerCountFromJson = registersArray.size();
-            
-            // IMPORTANTE: registerCount deve ser baseado no tamanho real do array de registros
-            config.devices[i].registerCount = registerCountFromJson;
-            
-            // Limita ao máximo permitido
-            if (config.devices[i].registerCount > MAX_REGISTERS_PER_DEVICE) {
-                config.devices[i].registerCount = MAX_REGISTERS_PER_DEVICE;
+            if (regObj.containsKey("offset") && regObj["offset"].is<float>()) {
+                config.devices[i].registers[j].offset = regObj["offset"].as<float>();
+            } else {
+                config.devices[i].registers[j].offset = 0.0f;
             }
             
-            Serial.print("Processando dispositivo ");
-            Serial.print(i);
-            Serial.print(": ");
-            Serial.print(config.devices[i].registerCount);
-            Serial.println(" registros");
-            
-            for (int j = 0; j < config.devices[i].registerCount && j < registerCountFromJson; j++) {
-                JsonObject regObj = registersArray[j];
-                if (!regObj) {
-                    Serial.print("AVISO: Registro ");
-                    Serial.print(j);
-                    Serial.print(" do dispositivo ");
-                    Serial.print(i);
-                    Serial.println(" nao encontrado no JSON");
-                    continue;
-                }
-                
-                config.devices[i].registers[j].address = regObj["address"] | 0;
-                config.devices[i].registers[j].isInput = regObj["isInput"] | true;
-                config.devices[i].registers[j].isOutput = regObj["isOutput"] | false;
-                config.devices[i].registers[j].readOnly = regObj["readOnly"] | false;
-                
-                // IMPORTANTE: Inicializa valor com 0 mesmo sem leitura do dispositivo
-                // Isso garante que a variável existe e pode ser usada nas expressões
-                config.devices[i].registers[j].value = 0;
-                
-                // Carrega nome da variável
-                const char* varName = regObj["variableName"] | "";
-                strncpy(config.devices[i].registers[j].variableName, varName, sizeof(config.devices[i].registers[j].variableName) - 1);
-                config.devices[i].registers[j].variableName[sizeof(config.devices[i].registers[j].variableName) - 1] = '\0';
-                
-                // Carrega ganho e offset (valores padrão se não especificados)
-                config.devices[i].registers[j].gain = regObj["gain"] | 1.0f;
-                config.devices[i].registers[j].offset = regObj["offset"] | 0.0f;
-                
-                // Carrega kalmanEnabled (padrão: false)
-                config.devices[i].registers[j].kalmanEnabled = regObj["kalmanEnabled"] | false;
-                
-                // Carrega parâmetros do filtro de Kalman (valores padrão se não especificados)
-                config.devices[i].registers[j].kalmanQ = regObj["kalmanQ"] | 0.01f;
-                config.devices[i].registers[j].kalmanR = regObj["kalmanR"] | 0.1f;
-                
-                Serial.print("  Registro ");
-                Serial.print(j);
-                Serial.print(": endereco=");
-                Serial.print(config.devices[i].registers[j].address);
-                Serial.print(", variavel=");
-                Serial.println(config.devices[i].registers[j].variableName);
+            // Carrega kalmanEnabled (padrão: false) com validação
+            if (regObj.containsKey("kalmanEnabled") && regObj["kalmanEnabled"].is<bool>()) {
+                config.devices[i].registers[j].kalmanEnabled = regObj["kalmanEnabled"].as<bool>();
+            } else {
+                config.devices[i].registers[j].kalmanEnabled = false;
             }
-        }
-        
-        // Valida valores do Kalman antes de salvar
-        for (int i = 0; i < config.deviceCount; i++) {
-            for (int j = 0; j < config.devices[i].registerCount; j++) {
-                // Valida kalmanQ
-                if (isnan(config.devices[i].registers[j].kalmanQ) || isinf(config.devices[i].registers[j].kalmanQ) || config.devices[i].registers[j].kalmanQ <= 0.0f) {
+            
+            // Carrega parâmetros do filtro de Kalman (valores padrão se não especificados) com validação
+            if (regObj.containsKey("kalmanQ") && regObj["kalmanQ"].is<float>()) {
+                float kalmanQ = regObj["kalmanQ"].as<float>();
+                if (isnan(kalmanQ) || isinf(kalmanQ) || kalmanQ <= 0.0f) {
                     config.devices[i].registers[j].kalmanQ = 0.01f;
+                } else {
+                    config.devices[i].registers[j].kalmanQ = kalmanQ;
                 }
-                // Valida kalmanR
-                if (isnan(config.devices[i].registers[j].kalmanR) || isinf(config.devices[i].registers[j].kalmanR) || config.devices[i].registers[j].kalmanR <= 0.0f) {
+            } else {
+                config.devices[i].registers[j].kalmanQ = 0.01f;
+            }
+            
+            if (regObj.containsKey("kalmanR") && regObj["kalmanR"].is<float>()) {
+                float kalmanR = regObj["kalmanR"].as<float>();
+                if (isnan(kalmanR) || isinf(kalmanR) || kalmanR <= 0.0f) {
                     config.devices[i].registers[j].kalmanR = 0.1f;
+                } else {
+                    config.devices[i].registers[j].kalmanR = kalmanR;
                 }
+            } else {
+                config.devices[i].registers[j].kalmanR = 0.1f;
+            }
+            
+            Serial.print("[Config]   Registro ");
+            Serial.print(j);
+            Serial.print(": endereco=");
+            Serial.print(config.devices[i].registers[j].address);
+            Serial.print(", variavel=");
+            Serial.print(config.devices[i].registers[j].variableName);
+            Serial.print(", kalman=");
+            Serial.print(config.devices[i].registers[j].kalmanEnabled ? "sim" : "nao");
+            if (config.devices[i].registers[j].kalmanEnabled) {
+                Serial.print(", Q=");
+                Serial.print(config.devices[i].registers[j].kalmanQ);
+                Serial.print(", R=");
+                Serial.print(config.devices[i].registers[j].kalmanR);
+            }
+            Serial.println();
+        }
+    }
+    
+    // Valida valores do Kalman antes de salvar
+    for (int i = 0; i < config.deviceCount; i++) {
+        for (int j = 0; j < config.devices[i].registerCount; j++) {
+            // Valida kalmanQ
+            if (isnan(config.devices[i].registers[j].kalmanQ) || isinf(config.devices[i].registers[j].kalmanQ) || config.devices[i].registers[j].kalmanQ <= 0.0f) {
+                config.devices[i].registers[j].kalmanQ = 0.01f;
+            }
+            // Valida kalmanR
+            if (isnan(config.devices[i].registers[j].kalmanR) || isinf(config.devices[i].registers[j].kalmanR) || config.devices[i].registers[j].kalmanR <= 0.0f) {
+                config.devices[i].registers[j].kalmanR = 0.1f;
             }
         }
-        
-        // Salva na EEPROM (memória não volátil)
-        Serial.println("Salvando configuração...");
-        consolePrint("[Acao] Botao 'Salvar Todas as Configuracoes' clicado\r\n");
-        
-        bool saveSuccess = saveConfig();
-        
-        if (saveSuccess) {
-            request->send(200, "application/json", "{\"status\":\"ok\"}");
-        } else {
-            Serial.println("ERRO: Falha ao salvar configuração");
-            request->send(500, "application/json", "{\"error\":\"Erro ao salvar configuração\"}");
-        }
+    }
+    
+    // Salva na EEPROM (memória não volátil)
+    Serial.println("[Config] Salvando configuração na memória não volátil...");
+    consolePrint("[Acao] Botao 'Salvar Todas as Configuracoes' clicado\r\n");
+    
+    bool saveSuccess = saveConfig();
+    
+    if (saveSuccess) {
+        Serial.println("[Config] Configuração salva com sucesso!");
+        Serial.print("[Config] WiFi Mode salvo: '");
+        Serial.print(config.wifi.mode);
+        Serial.print("', STA SSID: '");
+        Serial.print(config.wifi.staSSID);
+        Serial.print("', STA Password length: ");
+        Serial.println(strlen(config.wifi.staPassword));
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuração salva com sucesso\"}");
     } else {
-        request->send(400, "application/json", "{\"error\":\"Dados não fornecidos\"}");
+        Serial.println("[Config] ERRO: Falha ao salvar configuração na memória");
+        request->send(500, "application/json", "{\"error\":\"Erro ao salvar configuração na memória\"}");
     }
 }
 
@@ -451,12 +719,32 @@ void handleReadRegisters(AsyncWebServerRequest *request) {
 }
 
 void handleReboot(AsyncWebServerRequest *request) {
-    request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Reiniciando em 2 segundos...\"}");
+    // Salva a configuração antes de reiniciar (garante que está persistida)
+    Serial.println("Salvando configuração antes do reboot...");
+    bool saved = saveConfig();
+    if (saved) {
+        Serial.println("Configuração salva com sucesso!");
+    } else {
+        Serial.println("AVISO: Falha ao salvar configuração antes do reboot");
+    }
+    
+    // Envia resposta imediata para o cliente
+    request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuracao salva! Reiniciando em 10 segundos...\"}");
     
     Serial.println("Reboot solicitado via web interface");
-    Serial.println("Reiniciando em 2 segundos...");
+    Serial.println("Configuração salva! Reiniciando em 10 segundos...");
     
-    delay(2000);
+    // Aguarda 10 segundos antes de reiniciar
+    // Isso dá tempo para o cliente receber a resposta e mostrar a mensagem
+    for (int i = 10; i > 0; i--) {
+        Serial.print("Reiniciando em ");
+        Serial.print(i);
+        Serial.println(" segundos...");
+        delay(1000);
+    }
+    
+    Serial.println("Reiniciando agora...");
+    Serial.flush();
     ESP.restart();
 }
 
@@ -606,113 +894,250 @@ void handleSyncNTP(AsyncWebServerRequest *request) {
 
 void handleWiFiScan(AsyncWebServerRequest *request) {
     Serial.println("Iniciando scan de redes WiFi...");
+    Serial.flush();
     
     DynamicJsonDocument doc(4096);
     JsonArray networks = doc.createNestedArray("networks");
     
+    // Salva o estado WiFi atual para restaurar depois
+    WiFiMode_t originalMode = WiFi.getMode();
+    bool wasConnectedSTA = false;
+    String originalSSID = "";
+    
+    // IMPORTANTE: Verifica se está conectado como STA (não AP)
+    // Se estiver em modo AP, o cliente está conectado ao nosso AP e NÃO devemos desconectar
+    if (originalMode == WIFI_STA || originalMode == WIFI_AP_STA) {
+        if (WiFi.status() == WL_CONNECTED) {
+            wasConnectedSTA = true;
+            originalSSID = WiFi.SSID();
+        }
+    }
+    
     try {
-        // Salva o modo WiFi atual
-        WiFiMode_t currentMode = WiFi.getMode();
-        
         // Para fazer scan, precisa estar em modo AP_STA ou STA
         // Se estiver apenas em AP, muda temporariamente para AP_STA
-        if (currentMode == WIFI_AP) {
-            Serial.println("Mudando temporariamente para modo AP_STA para fazer scan...");
-            WiFi.mode(WIFI_AP_STA);
-            delay(200);  // Aguarda estabilização
+        // IMPORTANTE: Ao mudar de AP para AP_STA, o AP continua funcionando
+        // então o cliente conectado ao AP NÃO perde conexão
+        if (originalMode == WIFI_AP) {
+            Serial.println("Mudando de AP para AP_STA para fazer scan (AP continua ativo)...");
+            Serial.flush();
             
-            // Reconfigura o AP
+            // Salva configuração do AP antes de mudar
             const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
             const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
+            
+            // Muda para AP_STA - o AP continua funcionando, cliente não perde conexão
+            WiFi.mode(WIFI_AP_STA);
+            yield();
+            delay(100);  // Aguarda estabilização mínima
+            yield();
+            
+            // Garante que o AP continua configurado (pode não ser necessário, mas é seguro)
             WiFi.softAP(apSSID, apPassword);
-            delay(200);
+            yield();
+            delay(50);
+            yield();
+        } else if (originalMode == WIFI_STA) {
+            // Se está em modo STA e conectado a outra rede, desconecta temporariamente
+            // para fazer o scan mais rápido (mas isso pode desconectar o cliente se ele
+            // estiver usando o ESP32 como gateway - então vamos evitar isso)
+            // Na verdade, não precisamos desconectar - o scan funciona mesmo conectado
+            Serial.println("Modo STA - scan será feito sem desconectar");
+            Serial.flush();
+        } else if (originalMode == WIFI_AP_STA) {
+            // Já está no modo correto, apenas garante que AP está ativo
+            Serial.println("Já está em modo AP_STA - scan será feito");
+            Serial.flush();
         }
+        
+        // Se estava conectado como STA a outra rede, podemos desconectar temporariamente
+        // para fazer scan mais rápido, mas isso é opcional
+        // Vamos deixar conectado para não perder conexão do cliente
         
         // Limpa scans anteriores
         WiFi.scanDelete();
-        delay(100);
+        yield();
+        delay(50);
+        yield();
         
-        // Inicia scan (modo assíncrono)
-        Serial.println("Escaneando redes...");
+        // CRÍTICO: Remove a task atual do watchdog temporariamente durante o scan
+        // Isso evita que o ESP32 reinicie durante o scan WiFi
+        // Nota: NULL remove a task atual (a task que está executando este código)
+        Serial.println("Removendo task do watchdog temporariamente para scan WiFi...");
+        Serial.flush();
+        esp_err_t wdt_result = esp_task_wdt_delete(NULL);
+        if (wdt_result != ESP_OK && wdt_result != ESP_ERR_NOT_FOUND) {
+            Serial.print("AVISO: Não foi possível remover task do watchdog: ");
+            Serial.println(wdt_result);
+            Serial.print("Tentando continuar mesmo assim...");
+            Serial.flush();
+        } else {
+            Serial.println("Task removida do watchdog com sucesso");
+            Serial.flush();
+        }
+        
+        // Inicia scan (modo assíncrono, não mostra redes ocultas)
+        Serial.println("Iniciando scan assíncrono de redes...");
+        Serial.flush();
         int scanResult = WiFi.scanNetworks(true, false);  // async=true, show_hidden=false
         
         if (scanResult == WIFI_SCAN_FAILED) {
             Serial.println("Erro ao iniciar scan WiFi");
+            Serial.flush();
+            
+            // CRÍTICO: Reabilita o watchdog ANTES de retornar
+            Serial.println("Reabilitando watchdog (adicionando task de volta)...");
+            Serial.flush();
+            esp_err_t wdt_restore = esp_task_wdt_add(NULL);
+            if (wdt_restore != ESP_OK && wdt_restore != ESP_ERR_INVALID_STATE) {
+                esp_task_wdt_reset(); // Fallback
+            }
+            
             doc["status"] = "error";
-            doc["message"] = "Falha ao iniciar scan WiFi";
+            doc["message"] = "Falha ao iniciar scan WiFi. Verifique se o WiFi está habilitado.";
+            
+            // Restaura estado original ANTES de enviar resposta
+            restoreWiFiState(originalMode, wasConnectedSTA, originalSSID);
+            
+            // Envia resposta como HTTP 200 (não 500) para que o frontend possa processar o JSON
             String response;
-            serializeJson(doc, response);
-            request->send(500, "application/json", response);
+            if (serializeJson(doc, response) == 0) {
+                // Se falhar a serialização, envia resposta simples
+                response = "{\"status\":\"error\",\"message\":\"Erro ao processar resposta\"}";
+            }
+            request->send(200, "application/json", response);
             return;
         }
         
-        // Aguarda o scan completar (timeout de 15 segundos)
+        // Aguarda o scan completar (timeout de 10 segundos)
+        // Com watchdog desabilitado, podemos usar um timeout maior
         unsigned long startTime = millis();
         int n = -1;
-        while (n < 0 && (millis() - startTime) < 15000) {
-            delay(200);
+        const unsigned long SCAN_TIMEOUT = 10000; // 10 segundos (aumentado já que watchdog está desabilitado)
+        
+        Serial.println("Aguardando scan completar (watchdog desabilitado)...");
+        Serial.flush();
+        
+        // Loop de espera - watchdog está desabilitado, então não precisa de yield() tão frequente
+        // Mas ainda usamos yield() para manter responsividade do servidor web
+        while (n < 0 && (millis() - startTime) < SCAN_TIMEOUT) {
+            yield(); // Mantém servidor web responsivo
+            delay(100); // Delay de 100ms entre verificações
+            yield();
             n = WiFi.scanComplete();
-        }
-        
-        if (n < 0) {
-        Serial.println("Erro ao escanear redes WiFi");
-        doc["status"] = "error";
-        doc["message"] = "Falha ao escanear redes WiFi";
-    } else if (n == 0) {
-        Serial.println("Nenhuma rede encontrada");
-        doc["status"] = "no_networks";
-    } else {
-        Serial.print(n);
-        Serial.println(" redes encontradas");
-        
-        // Adiciona todas as redes encontradas
-        for (int i = 0; i < n; ++i) {
-            JsonObject network = networks.createNestedObject();
-            network["ssid"] = WiFi.SSID(i);
-            network["rssi"] = WiFi.RSSI(i);
-            network["encryption"] = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "open" : "encrypted";
             
-            // Calcula qualidade do sinal em porcentagem (0-100%)
-            // RSSI típico: -100 (muito fraco) a -30 (muito forte)
-            int quality = 2 * (WiFi.RSSI(i) + 100);
-            if (quality > 100) quality = 100;
-            if (quality < 0) quality = 0;
-            network["quality"] = quality;
-            
-            // Descrição da qualidade
-            String qualityDesc;
-            if (quality >= 80) {
-                qualityDesc = "Excelente";
-            } else if (quality >= 60) {
-                qualityDesc = "Boa";
-            } else if (quality >= 40) {
-                qualityDesc = "Regular";
-            } else if (quality >= 20) {
-                qualityDesc = "Fraca";
-            } else {
-                qualityDesc = "Muito Fraca";
+            // Log de progresso a cada segundo
+            unsigned long elapsed = millis() - startTime;
+            if (elapsed > 0 && elapsed % 1000 < 150) {
+                Serial.print("Scan em andamento... ");
+                Serial.print(elapsed / 1000);
+                Serial.println("s");
+                Serial.flush();
             }
-            network["qualityDesc"] = qualityDesc;
-            
-            // Canal
-            network["channel"] = WiFi.channel(i);
         }
         
+        // CRÍTICO: Reabilita o watchdog imediatamente após o scan (ou timeout)
+        // Adiciona a task atual de volta ao watchdog
+        Serial.println("Reabilitando watchdog (adicionando task de volta)...");
+        Serial.flush();
+        wdt_result = esp_task_wdt_add(NULL);
+        if (wdt_result != ESP_OK && wdt_result != ESP_ERR_INVALID_STATE) {
+            Serial.print("AVISO: Não foi possível reabilitar watchdog: ");
+            Serial.println(wdt_result);
+            Serial.print("Tentando resetar watchdog...");
+            Serial.flush();
+            // Tenta resetar o watchdog como fallback
+            esp_task_wdt_reset();
+        } else {
+            Serial.println("Watchdog reabilitado com sucesso");
+            Serial.flush();
+        }
+        
+        // Verifica se o scan completou ou se houve timeout
+        if (n < 0) {
+            unsigned long elapsed = millis() - startTime;
+            Serial.print("Timeout ao escanear redes WiFi após ");
+            Serial.print(elapsed);
+            Serial.println("ms");
+            Serial.flush();
+            
+            // Prepara resposta de erro (HTTP 200 com status de erro para o frontend processar)
+            doc["status"] = "error";
+            doc["message"] = "Timeout ao escanear redes WiFi. O scan demorou mais de 10 segundos. Tente novamente.";
+            doc["timeout"] = true;
+            
+            // Restaura estado original ANTES de enviar resposta
+            restoreWiFiState(originalMode, wasConnectedSTA, originalSSID);
+            
+            // Envia resposta como HTTP 200 (não 500) para que o frontend possa processar o JSON
+            String response;
+            if (serializeJson(doc, response) == 0) {
+                // Se falhar a serialização, envia resposta simples
+                response = "{\"status\":\"error\",\"message\":\"Erro ao processar resposta\"}";
+            }
+            request->send(200, "application/json", response);
+            
+            // Limpa resultados do scan
+            WiFi.scanDelete();
+            yield();
+            return;
+        }
+        
+        // Processa resultados do scan
+        if (n == 0) {
+            Serial.println("Nenhuma rede encontrada");
+            doc["status"] = "no_networks";
+            doc["message"] = "Nenhuma rede encontrada";
+        } else {
+            Serial.print(n);
+            Serial.println(" redes encontradas");
+            
+            // Adiciona todas as redes encontradas
+            for (int i = 0; i < n; ++i) {
+                yield(); // Permite que outras tarefas executem durante o processamento
+                
+                JsonObject network = networks.createNestedObject();
+                network["ssid"] = WiFi.SSID(i);
+                network["rssi"] = WiFi.RSSI(i);
+                network["encryption"] = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN) ? "open" : "encrypted";
+                
+                // Calcula qualidade do sinal em porcentagem (0-100%)
+                // RSSI típico: -100 (muito fraco) a -30 (muito forte)
+                int quality = 2 * (WiFi.RSSI(i) + 100);
+                if (quality > 100) quality = 100;
+                if (quality < 0) quality = 0;
+                network["quality"] = quality;
+                
+                // Descrição da qualidade
+                String qualityDesc;
+                if (quality >= 80) {
+                    qualityDesc = "Excelente";
+                } else if (quality >= 60) {
+                    qualityDesc = "Boa";
+                } else if (quality >= 40) {
+                    qualityDesc = "Regular";
+                } else if (quality >= 20) {
+                    qualityDesc = "Fraca";
+                } else {
+                    qualityDesc = "Muito Fraca";
+                }
+                network["qualityDesc"] = qualityDesc;
+                
+                // Canal
+                network["channel"] = WiFi.channel(i);
+                
+                // Yield a cada 5 redes processadas para não bloquear muito tempo
+                if (i % 5 == 0) {
+                    yield();
+                }
+            }
+            
             doc["status"] = "success";
             doc["count"] = n;
         }
         
-        // Restaura o modo WiFi original se foi alterado
-        if (currentMode == WIFI_AP) {
-            Serial.println("Restaurando modo AP...");
-            WiFi.mode(WIFI_AP);
-            delay(200);
-            
-            // Reconfigura o AP
-            const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
-            const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
-            WiFi.softAP(apSSID, apPassword);
-        }
+        // Restaura estado WiFi original
+        restoreWiFiState(originalMode, wasConnectedSTA, originalSSID);
         
         String response;
         serializeJson(doc, response);
@@ -720,15 +1145,85 @@ void handleWiFiScan(AsyncWebServerRequest *request) {
         
         // Limpa resultados do scan
         WiFi.scanDelete();
+        yield();
         
     } catch (...) {
         Serial.println("Erro inesperado no scan WiFi");
+        Serial.flush();
+        
+        // CRÍTICO: Garante que o watchdog seja reabilitado mesmo em caso de exceção
+        Serial.println("Reabilitando watchdog após exceção (adicionando task de volta)...");
+        Serial.flush();
+        esp_err_t wdt_restore = esp_task_wdt_add(NULL);
+        if (wdt_restore != ESP_OK && wdt_restore != ESP_ERR_INVALID_STATE) {
+            esp_task_wdt_reset(); // Fallback
+        }
+        
         doc["status"] = "error";
-        doc["message"] = "Erro interno ao escanear redes";
+        doc["message"] = "Erro interno ao escanear redes. Tente novamente.";
+        
+        // Tenta restaurar estado original mesmo em caso de erro
+        restoreWiFiState(originalMode, wasConnectedSTA, originalSSID);
+        
+        // Envia resposta como HTTP 200 (não 500) para que o frontend possa processar o JSON
         String response;
-        serializeJson(doc, response);
-        request->send(500, "application/json", response);
+        if (serializeJson(doc, response) == 0) {
+            // Se falhar a serialização, envia resposta simples
+            response = "{\"status\":\"error\",\"message\":\"Erro ao processar resposta\"}";
+        }
+        request->send(200, "application/json", response);
     }
+}
+
+// Função auxiliar para restaurar o estado WiFi original
+void restoreWiFiState(WiFiMode_t originalMode, bool wasConnectedSTA, const String& originalSSID) {
+    Serial.println("Restaurando estado WiFi original...");
+    Serial.flush();
+    
+    yield();
+    
+    // Restaura o modo WiFi original
+    if (originalMode == WIFI_AP) {
+        // Se estava em AP, volta para AP (cliente conectado ao AP não perde conexão)
+        // Ao mudar de AP_STA para AP, o AP continua funcionando
+        WiFi.mode(WIFI_AP);
+        yield();
+        delay(50);  // Delay mínimo para estabilização
+        yield();
+        
+        // Garante que o AP está configurado (pode não ser necessário, mas é seguro)
+        const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
+        const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
+        WiFi.softAP(apSSID, apPassword);
+        yield();
+    } else if (originalMode == WIFI_STA) {
+        // Se estava em STA, volta para STA
+        WiFi.mode(WIFI_STA);
+        yield();
+        delay(50);
+        yield();
+        
+        // Se estava conectado como STA, tenta reconectar (não-bloqueante)
+        if (wasConnectedSTA && originalSSID.length() > 0) {
+            WiFi.begin(originalSSID.c_str());
+            yield();
+        }
+    } else if (originalMode == WIFI_AP_STA) {
+        // Se já estava em AP_STA, não precisa mudar nada
+        // Apenas garante que o AP está configurado
+        const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
+        const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
+        WiFi.softAP(apSSID, apPassword);
+        yield();
+        
+        // Se estava conectado como STA, tenta reconectar (não-bloqueante)
+        if (wasConnectedSTA && originalSSID.length() > 0) {
+            WiFi.begin(originalSSID.c_str());
+            yield();
+        }
+    }
+    
+    yield();
 }
 
 void handleGetVariables(AsyncWebServerRequest *request) {
@@ -892,28 +1387,77 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
             config.mqtt.interval = mqttObj["interval"] | 60;
         }
         
-        // Atualiza configuração WiFi
+        // Atualiza configuração WiFi (usa mesma lógica de handleSaveConfig)
         if (doc.containsKey("wifi")) {
             JsonObject wifiObj = doc["wifi"];
-            const char* modeStr = wifiObj["mode"] | "ap";
-            strncpy(config.wifi.mode, modeStr, sizeof(config.wifi.mode) - 1);
-            config.wifi.mode[sizeof(config.wifi.mode) - 1] = '\0';
             
-            const char* apSSIDStr = wifiObj["apSSID"] | AP_SSID;
-            strncpy(config.wifi.apSSID, apSSIDStr, sizeof(config.wifi.apSSID) - 1);
-            config.wifi.apSSID[sizeof(config.wifi.apSSID) - 1] = '\0';
+            // Processa modo WiFi com validação e normalização para minúsculas
+            if (wifiObj.containsKey("mode") && wifiObj["mode"].is<const char*>()) {
+                const char* modeStr = wifiObj["mode"].as<const char*>();
+                if (modeStr && strlen(modeStr) > 0) {
+                    // Normaliza para minúsculas para evitar problemas de comparação
+                    String modeStrLower = String(modeStr);
+                    modeStrLower.toLowerCase();
+                    strncpy(config.wifi.mode, modeStrLower.c_str(), sizeof(config.wifi.mode) - 1);
+                    config.wifi.mode[sizeof(config.wifi.mode) - 1] = '\0';
+                } else {
+                    strcpy(config.wifi.mode, "ap");
+                }
+            } else {
+                strcpy(config.wifi.mode, "ap");
+            }
             
-            const char* apPasswordStr = wifiObj["apPassword"] | AP_PASSWORD;
-            strncpy(config.wifi.apPassword, apPasswordStr, sizeof(config.wifi.apPassword) - 1);
-            config.wifi.apPassword[sizeof(config.wifi.apPassword) - 1] = '\0';
+            // Processa AP SSID com validação
+            if (wifiObj.containsKey("apSSID") && wifiObj["apSSID"].is<const char*>()) {
+                const char* apSSIDStr = wifiObj["apSSID"].as<const char*>();
+                if (apSSIDStr) {
+                    strncpy(config.wifi.apSSID, apSSIDStr, sizeof(config.wifi.apSSID) - 1);
+                    config.wifi.apSSID[sizeof(config.wifi.apSSID) - 1] = '\0';
+                } else {
+                    strcpy(config.wifi.apSSID, AP_SSID);
+                }
+            } else {
+                strcpy(config.wifi.apSSID, AP_SSID);
+            }
             
-            const char* staSSIDStr = wifiObj["staSSID"] | "";
-            strncpy(config.wifi.staSSID, staSSIDStr, sizeof(config.wifi.staSSID) - 1);
-            config.wifi.staSSID[sizeof(config.wifi.staSSID) - 1] = '\0';
+            // Processa AP Password com validação
+            if (wifiObj.containsKey("apPassword") && wifiObj["apPassword"].is<const char*>()) {
+                const char* apPasswordStr = wifiObj["apPassword"].as<const char*>();
+                if (apPasswordStr) {
+                    strncpy(config.wifi.apPassword, apPasswordStr, sizeof(config.wifi.apPassword) - 1);
+                    config.wifi.apPassword[sizeof(config.wifi.apPassword) - 1] = '\0';
+                } else {
+                    strcpy(config.wifi.apPassword, AP_PASSWORD);
+                }
+            } else {
+                strcpy(config.wifi.apPassword, AP_PASSWORD);
+            }
             
-            const char* staPasswordStr = wifiObj["staPassword"] | "";
-            strncpy(config.wifi.staPassword, staPasswordStr, sizeof(config.wifi.staPassword) - 1);
-            config.wifi.staPassword[sizeof(config.wifi.staPassword) - 1] = '\0';
+            // Processa STA SSID com validação
+            if (wifiObj.containsKey("staSSID") && wifiObj["staSSID"].is<const char*>()) {
+                const char* staSSIDStr = wifiObj["staSSID"].as<const char*>();
+                if (staSSIDStr) {
+                    strncpy(config.wifi.staSSID, staSSIDStr, sizeof(config.wifi.staSSID) - 1);
+                    config.wifi.staSSID[sizeof(config.wifi.staSSID) - 1] = '\0';
+                } else {
+                    config.wifi.staSSID[0] = '\0';
+                }
+            } else {
+                config.wifi.staSSID[0] = '\0';
+            }
+            
+            // Processa STA Password com validação
+            if (wifiObj.containsKey("staPassword") && wifiObj["staPassword"].is<const char*>()) {
+                const char* staPasswordStr = wifiObj["staPassword"].as<const char*>();
+                if (staPasswordStr) {
+                    strncpy(config.wifi.staPassword, staPasswordStr, sizeof(config.wifi.staPassword) - 1);
+                    config.wifi.staPassword[sizeof(config.wifi.staPassword) - 1] = '\0';
+                } else {
+                    config.wifi.staPassword[0] = '\0';
+                }
+            } else {
+                config.wifi.staPassword[0] = '\0';
+            }
         }
         
         // Atualiza configuração RTC
@@ -997,15 +1541,61 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
                 config.devices[i].registers[j].variableName[sizeof(config.devices[i].registers[j].variableName) - 1] = '\0';
                 
                 // Carrega ganho e offset (valores padrão se não especificados)
-                config.devices[i].registers[j].gain = regObj["gain"] | 1.0f;
-                config.devices[i].registers[j].offset = regObj["offset"] | 0.0f;
+                if (regObj.containsKey("gain") && regObj["gain"].is<float>()) {
+                    config.devices[i].registers[j].gain = regObj["gain"].as<float>();
+                } else {
+                    config.devices[i].registers[j].gain = 1.0f;
+                }
                 
-                // Carrega kalmanEnabled (padrão: false)
-                config.devices[i].registers[j].kalmanEnabled = regObj["kalmanEnabled"] | false;
+                if (regObj.containsKey("offset") && regObj["offset"].is<float>()) {
+                    config.devices[i].registers[j].offset = regObj["offset"].as<float>();
+                } else {
+                    config.devices[i].registers[j].offset = 0.0f;
+                }
                 
-                // Carrega parâmetros do filtro de Kalman (valores padrão se não especificados)
-                config.devices[i].registers[j].kalmanQ = regObj["kalmanQ"] | 0.01f;
-                config.devices[i].registers[j].kalmanR = regObj["kalmanR"] | 0.1f;
+                // Carrega kalmanEnabled (padrão: false) com validação
+                if (regObj.containsKey("kalmanEnabled") && regObj["kalmanEnabled"].is<bool>()) {
+                    config.devices[i].registers[j].kalmanEnabled = regObj["kalmanEnabled"].as<bool>();
+                } else {
+                    config.devices[i].registers[j].kalmanEnabled = false;
+                }
+                
+                // Carrega parâmetros do filtro de Kalman (valores padrão se não especificados) com validação
+                if (regObj.containsKey("kalmanQ") && regObj["kalmanQ"].is<float>()) {
+                    float kalmanQ = regObj["kalmanQ"].as<float>();
+                    if (isnan(kalmanQ) || isinf(kalmanQ) || kalmanQ <= 0.0f) {
+                        config.devices[i].registers[j].kalmanQ = 0.01f;
+                    } else {
+                        config.devices[i].registers[j].kalmanQ = kalmanQ;
+                    }
+                } else {
+                    config.devices[i].registers[j].kalmanQ = 0.01f;
+                }
+                
+                if (regObj.containsKey("kalmanR") && regObj["kalmanR"].is<float>()) {
+                    float kalmanR = regObj["kalmanR"].as<float>();
+                    if (isnan(kalmanR) || isinf(kalmanR) || kalmanR <= 0.0f) {
+                        config.devices[i].registers[j].kalmanR = 0.1f;
+                    } else {
+                        config.devices[i].registers[j].kalmanR = kalmanR;
+                    }
+                } else {
+                    config.devices[i].registers[j].kalmanR = 0.1f;
+                }
+            }
+        }
+        
+        // Valida valores do Kalman antes de salvar (mesma validação de handleSaveConfig)
+        for (int i = 0; i < config.deviceCount; i++) {
+            for (int j = 0; j < config.devices[i].registerCount; j++) {
+                // Valida kalmanQ
+                if (isnan(config.devices[i].registers[j].kalmanQ) || isinf(config.devices[i].registers[j].kalmanQ) || config.devices[i].registers[j].kalmanQ <= 0.0f) {
+                    config.devices[i].registers[j].kalmanQ = 0.01f;
+                }
+                // Valida kalmanR
+                if (isnan(config.devices[i].registers[j].kalmanR) || isinf(config.devices[i].registers[j].kalmanR) || config.devices[i].registers[j].kalmanR <= 0.0f) {
+                    config.devices[i].registers[j].kalmanR = 0.1f;
+                }
             }
         }
         

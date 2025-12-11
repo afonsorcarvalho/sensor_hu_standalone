@@ -29,30 +29,91 @@ bool littleFSStatus = false;  // Status de inicialização do LittleFS
 // ==================== SETUP E LOOP ====================
 
 void setup() {
+    // Inicializa Serial na porta USB de programação (USB Serial/JTAG)
+    // No ESP32-S3, Serial usa a porta USB de programação por padrão
+    // IMPORTANTE: Não usar while(!Serial) no ESP32-S3 pois pode bloquear indefinidamente
     Serial.begin(115200);
-    delay(1000);
+    delay(2000); // Aguarda estabilização da Serial (2 segundos para garantir)
+    
+    // Teste imediato - envia caracteres diretamente
+    Serial.write(0x0A); // \n
+    Serial.write(0x0D); // \r
+    Serial.write(0x0A); // \n
+    Serial.flush();
+    delay(200);
+    
+    // Mensagem de teste
+    Serial.println();
+    Serial.println("=== TESTE SERIAL ===");
+    Serial.println("Se voce esta vendo isso, a Serial esta funcionando!");
+    Serial.flush();
+    delay(200);
     
     Serial.println("\n=== Sistema Modbus RTU Master ESP32-S3 ===");
+    Serial.flush();
+    delay(100);
     
     // Inicializa LittleFS
+    Serial.println("Inicializando LittleFS...");
+    Serial.flush();
     littleFSStatus = initLittleFS();
     if (!littleFSStatus) {
         Serial.println("AVISO: LittleFS nao inicializado. Interface web pode nao funcionar.");
+        Serial.flush();
+    } else {
+        Serial.println("LittleFS inicializado com sucesso!");
+        Serial.flush();
     }
     
     // Carrega configuração salva
+    Serial.println("Carregando configuração...");
+    Serial.flush();
     loadConfig();
+    Serial.println("Configuração carregada!");
+    Serial.flush();
     
     // Configura WiFi baseado na configuração salva
+    Serial.print("Modo WiFi configurado: '");
+    Serial.print(config.wifi.mode);
+    Serial.print("', STA SSID: '");
+    Serial.print(config.wifi.staSSID);
+    Serial.println("'");
+    
     bool connected = false;
-    if (strcmp(config.wifi.mode, "sta") == 0 && strlen(config.wifi.staSSID) > 0) {
-        // Tenta conectar no modo STA
+    // Compara modo WiFi (case-insensitive)
+    String modeStr = String(config.wifi.mode);
+    modeStr.toLowerCase();
+    
+    Serial.println("=== Inicializacao WiFi ===");
+    Serial.print("Modo configurado: '");
+    Serial.print(config.wifi.mode);
+    Serial.print("' (normalizado: '");
+    Serial.print(modeStr);
+    Serial.print("')");
+    Serial.print(", STA SSID: '");
+    Serial.print(config.wifi.staSSID);
+    Serial.print("' (length: ");
+    Serial.print(strlen(config.wifi.staSSID));
+    Serial.println(")");
+    
+    if (modeStr == "sta" && strlen(config.wifi.staSSID) > 0) {
+        Serial.println("[WiFi] Modo STA configurado - tentando conectar...");
+        // Tenta conectar no modo STA (3 tentativas, 10s cada)
         connected = setupWiFiSTA();
+    } else {
+        Serial.print("[WiFi] Modo WiFi nao e STA ou SSID nao configurado. ");
+        Serial.print("Modo: '");
+        Serial.print(config.wifi.mode);
+        Serial.print("', SSID length: ");
+        Serial.println(strlen(config.wifi.staSSID));
     }
     
-    // Se não conectou no STA, usa modo AP
+    // Se não conectou no STA, usa modo AP (fallback)
     if (!connected) {
+        Serial.println("[WiFi] Usando modo AP (fallback ou configurado)");
         setupWiFiAP();
+    } else {
+        Serial.println("[WiFi] Conectado no modo STA com sucesso!");
     }
     
     // Configura servidor web
@@ -127,6 +188,7 @@ void setup() {
     }
     
     Serial.println("Sistema inicializado!");
+    Serial.flush(); // Força envio imediato
     consolePrint("[Sistema] Sistema inicializado com sucesso!\r\n");
     
     if (WiFi.status() == WL_CONNECTED) {
@@ -140,6 +202,7 @@ void setup() {
         Serial.println("Acesse: http://" + WiFi.softAPIP().toString());
     }
     Serial.println("Console WebSocket disponivel na porta 81");
+    Serial.flush(); // Força envio imediato de todas as mensagens de inicialização
     
     // Mensagem final no console web
     consolePrint("=== Sistema inicializado com sucesso! ===\r\n");
@@ -180,6 +243,7 @@ void loop() {
         writeOutputRegisters();
         
         Serial.println("Ciclo de leitura/cálculo/escrita executado");
+        Serial.flush(); // Força envio imediato para debug
     }
     
     delay(10);
