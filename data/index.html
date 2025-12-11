@@ -338,6 +338,7 @@
             <button class="btn btn-success" onclick="saveAllConfig()">Salvar Todas as Configuracoes</button>
             <button class="btn btn-info" onclick="exportConfig()">Exportar Configuracoes</button>
             <button class="btn btn-warning" onclick="importConfig()">Importar Configuracoes</button>
+            <button class="btn btn-danger" onclick="resetConfig()" title="Limpa todas as configurações e reseta para valores padrão">Resetar Configuracoes</button>
             <button class="btn btn-primary" onclick="readRegisters()">Ler Registros Modbus</button>
         </div>
         
@@ -1233,6 +1234,44 @@
                 }
             } catch (error) {
                 showStatus('Erro ao escrever: ' + error, true);
+            }
+        }
+        
+        // Função para resetar configurações para valores padrão
+        async function resetConfig() {
+            if (!confirm('ATENÇÃO: Isso irá apagar TODAS as configurações e resetar para valores padrão!\n\nTem certeza que deseja continuar?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/config/reset', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                // Verifica o tipo de conteúdo da resposta
+                const contentType = response.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    const text = await response.text();
+                    showStatus('Erro: Resposta não é JSON. Resposta: ' + text.substring(0, 100), true);
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'ok') {
+                    showStatus('Configurações resetadas com sucesso! Recarregando página...', false);
+                    // Recarrega a página após 2 segundos
+                    setTimeout(() => {
+                        location.reload();
+                    }, 2000);
+                } else {
+                    showStatus('Erro ao resetar: ' + (data.error || data.message || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao resetar: ' + error.message, true);
             }
         }
         

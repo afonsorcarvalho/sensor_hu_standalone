@@ -94,6 +94,11 @@ void handleExportConfig(AsyncWebServerRequest *request);
 void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len);
 
 /**
+ * @brief Handler para resetar configurações para valores padrão (POST /api/config/reset)
+ */
+void handleResetConfig(AsyncWebServerRequest *request);
+
+/**
  * @brief Handler para escrever valor de variável (POST /api/variable/write)
  */
 void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t len);

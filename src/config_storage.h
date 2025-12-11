@@ -24,5 +24,11 @@ void loadConfig();
  */
 bool saveConfig();
 
+/**
+ * @brief Limpa todas as configurações salvas e reseta para valores padrão
+ * @return true se limpou com sucesso, false caso contrário
+ */
+bool resetConfig();
+
 #endif // CONFIG_STORAGE_H
 

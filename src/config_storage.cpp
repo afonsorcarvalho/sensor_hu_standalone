@@ -371,3 +371,81 @@ bool saveConfig() {
     }
 }
 
+bool resetConfig() {
+    Serial.println("Resetando configurações para valores padrão...");
+    
+    // Limpa a configuração salva
+    preferences.begin("modbus", false); // Modo read-write
+    bool cleared = preferences.remove("config");
+    preferences.end();
+    
+    if (!cleared) {
+        Serial.println("AVISO: Não foi possível limpar configuração antiga (pode não existir)");
+    } else {
+        Serial.println("Configuração antiga removida");
+    }
+    
+    // Reseta a estrutura config para valores padrão
+    config.baudRate = MODBUS_SERIAL_BAUD;
+    config.deviceCount = 0;
+    
+    // Configurações padrão MQTT
+    config.mqtt.enabled = false;
+    strcpy(config.mqtt.server, "");
+    config.mqtt.port = 1883;
+    strcpy(config.mqtt.user, "");
+    strcpy(config.mqtt.password, "");
+    strcpy(config.mqtt.topic, "esp32/modbus");
+    config.mqtt.interval = 60;
+    
+    // Configurações padrão WiFi
+    strcpy(config.wifi.mode, "ap");
+    strcpy(config.wifi.apSSID, AP_SSID);
+    strcpy(config.wifi.apPassword, AP_PASSWORD);
+    strcpy(config.wifi.staSSID, "");
+    strcpy(config.wifi.staPassword, "");
+    
+    // Configurações padrão RTC
+    config.rtc.enabled = false;
+    config.rtc.timezone = -3;  // UTC-3 (Brasília)
+    strcpy(config.rtc.ntpServer, "pool.ntp.org");
+    config.rtc.ntpEnabled = true;
+    config.rtc.epochTime = 0;
+    config.rtc.bootTime = 0;
+    
+    // Código de cálculo vazio por padrão
+    config.calculationCode[0] = '\0';
+    
+    // Inicializa todos os campos padrão
+    for (int i = 0; i < MAX_DEVICES; i++) {
+        config.devices[i].slaveAddress = 0;
+        config.devices[i].enabled = false;
+        config.devices[i].registerCount = 0;
+        config.devices[i].deviceName[0] = '\0';
+        for (int j = 0; j < MAX_REGISTERS_PER_DEVICE; j++) {
+            config.devices[i].registers[j].address = 0;
+            config.devices[i].registers[j].value = 0;
+            config.devices[i].registers[j].isInput = true;
+            config.devices[i].registers[j].isOutput = false;
+            config.devices[i].registers[j].readOnly = false;
+            config.devices[i].registers[j].variableName[0] = '\0';
+            config.devices[i].registers[j].gain = 1.0f;
+            config.devices[i].registers[j].offset = 0.0f;
+            config.devices[i].registers[j].kalmanEnabled = false;
+            config.devices[i].registers[j].kalmanQ = 0.01f;
+            config.devices[i].registers[j].kalmanR = 0.1f;
+        }
+    }
+    
+    // Salva a configuração padrão
+    bool saved = saveConfig();
+    
+    if (saved) {
+        Serial.println("Configuração resetada e salva com sucesso");
+        return true;
+    } else {
+        Serial.println("ERRO: Falha ao salvar configuração padrão após reset");
+        return false;
+    }
+}
+

@@ -40,6 +40,24 @@ void setupWebServer() {
         handleRoot(request);
     });
     
+    // Rota para resetar configurações para valores padrão (deve vir antes de /api/config)
+    server.on("/api/config/reset", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (request) {
+            handleResetConfig(request);
+        }
+    });
+    
+    // Rota para exportar configurações (deve vir antes de /api/config)
+    server.on("/api/config/export", HTTP_GET, [](AsyncWebServerRequest *request){
+        handleExportConfig(request);
+    });
+    
+    // Rota para importar configurações (deve vir antes de /api/config)
+    server.on("/api/config/import", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+            handleImportConfig(request, data, len);
+        });
+    
     // Rota para obter configuração atual (JSON)
     server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
         handleGetConfig(request);
@@ -76,17 +94,6 @@ void setupWebServer() {
     server.on("/api/rtc/sync", HTTP_POST, [](AsyncWebServerRequest *request){
         handleSyncNTP(request);
     });
-    
-    // Rota para exportar configurações
-    server.on("/api/config/export", HTTP_GET, [](AsyncWebServerRequest *request){
-        handleExportConfig(request);
-    });
-    
-    // Rota para importar configurações
-    server.on("/api/config/import", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-            handleImportConfig(request, data, len);
-        });
     
     // Rota para scan de redes WiFi
     server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -1008,6 +1015,27 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
         request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuração importada com sucesso\"}");
     } else {
         request->send(400, "application/json", "{\"error\":\"Dados não fornecidos\"}");
+    }
+}
+
+void handleResetConfig(AsyncWebServerRequest *request) {
+    if (!request) {
+        return;
+    }
+    
+    Serial.println("Reset de configuração solicitado via API");
+    consolePrint("[Acao] Reset de configuracoes solicitado\r\n");
+    
+    bool success = resetConfig();
+    
+    if (success) {
+        Serial.println("Configuração resetada com sucesso");
+        consolePrint("[Sucesso] Configuracoes resetadas para valores padrao\r\n");
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuracao resetada para valores padrao\"}");
+    } else {
+        Serial.println("ERRO: Falha ao resetar configuração");
+        consolePrint("[Erro] Falha ao resetar configuracoes\r\n");
+        request->send(500, "application/json", "{\"status\":\"error\",\"error\":\"Falha ao resetar configuracao\"}");
     }
 }
 
