@@ -1,0 +1,24 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Trust Region Reflective (TRF)
+# Pontos de calibração: 4
+# Erro médio absoluto: 1.7855%
+# Erro máximo absoluto: 3.1604%
+# Erro RMS: 2.0317%
+
+# Constantes ajustadas:
+A = 7.409544
+B = 1.000000
+C = 153.121029
+D = 1.209456
+
+# Pontos de calibração utilizados:
+# TS = Temperatura do bulbo seco (°C)
+# TU = Temperatura do bulbo úmido (°C)
+# UR_Real = Umidade relativa real medida (%)
+# UR_Calculado = Umidade relativa calculada (%)
+# Erro_Absoluto = |UR_Real - UR_Calculado| (%)
+#     TS (°C)         TU (°C)         UR_Real (%)        UR_Calculado (%)     Erro_Absoluto (%)   
+1     27.700000       23.690000       45.100000          41.939560            3.160440            
+2     25.400000       22.100000       49.500000          51.675630            2.175630            
+3     30.800000       27.630000       53.600000          54.785237            1.185237            
+4     31.100000       28.300000       59.500000          60.120723            0.620723            

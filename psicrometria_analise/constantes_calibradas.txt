@@ -1,0 +1,11 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Data da calibração
+# Pontos de calibração: 4
+# Erro médio: 6.8719%
+# Erro máximo: 8.9325%
+# Erro RMS: 7.2601%
+
+A = 6.391510
+B = 8.113540
+C = 300.000000
+D = 1.830460

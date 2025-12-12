@@ -1,0 +1,11 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Trust Region Reflective (TRF)
+# Pontos de calibração: 5
+# Erro médio: 5.5581%
+# Erro máximo: 9.1937%
+# Erro RMS: 6.5592%
+
+A = 5.851318
+B = 11.936517
+C = 300.000000
+D = 2.120282

@@ -1,0 +1,11 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Differential Evolution
+# Pontos de calibração: 4
+# Erro médio: 6.8719%
+# Erro máximo: 8.9324%
+# Erro RMS: 7.2601%
+
+A = 4.961404
+B = 8.113773
+C = 300.000000
+D = 1.420917

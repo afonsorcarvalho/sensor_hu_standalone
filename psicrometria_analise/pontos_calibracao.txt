@@ -1,0 +1,15 @@
+# Arquivo de exemplo para pontos de calibração
+# Formato: TS TU UR (separados por espaço ou vírgula)
+# TS = Temperatura do bulbo seco em °C
+# TU = Temperatura do bulbo úmido em °C
+# UR = Umidade relativa real em %
+# Linhas começando com # são comentários e serão ignoradas
+# Linhas vazias também são ignoradas
+27.7 23.69 45.1
+25.4 22.1 49.5
+30.8 27.63 53.6
+31.1 28.3 59.5
+
+
+# Também aceita vírgula como separador:
+# 30.0, 25.0, 70.0
