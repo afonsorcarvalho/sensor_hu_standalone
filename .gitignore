@@ -81,3 +81,8 @@ partitions.csv.bak
 
 # Cache
 .cache/
+
+# Arquivos gerados da análise psicrométrica (opcional - descomente se não quiser commitá-los)
+psicrometria_analise/*.png
+psicrometria_analise/constantes_*.txt
+psicrometria_analise/pontos_calibracao.txt

@@ -218,6 +218,7 @@
             <button class="menu-btn" onclick="showSection('mqtt')">MQTT</button>
             <button class="menu-btn" onclick="showSection('wifi')">Rede WiFi</button>
             <button class="menu-btn" onclick="showSection('rtc')">Data Hora (RTC)</button>
+            <button class="menu-btn" onclick="showSection('wireguard')">WireGuard VPN</button>
             <button class="menu-btn" onclick="showSection('console')">Console</button>
         </div>
 
@@ -366,6 +367,65 @@
             </div>
         </div>
 
+        <!-- Seção WireGuard VPN -->
+        <div id="wireguard" class="section">
+            <h2>Configuracao WireGuard VPN</h2>
+            
+            <!-- Status em tempo real -->
+            <div style="background: #f0f0f0; padding: 15px; border-radius: 5px; margin-bottom: 20px;">
+                <h3 style="margin: 0 0 10px 0; color: #333;">Status da VPN</h3>
+                <div id="wireguardStatusDisplay" style="font-size: 18px; font-weight: bold; color: #666; margin-bottom: 10px;">
+                    Carregando...
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button class="btn btn-success" onclick="connectWireGuard()">Conectar VPN</button>
+                    <button class="btn btn-danger" onclick="disconnectWireGuard()">Desconectar VPN</button>
+                    <button class="btn btn-info" onclick="updateWireGuardStatus()">Atualizar Status</button>
+                </div>
+            </div>
+            
+            <div class="config-group">
+                <label>Habilitado: <input type="checkbox" id="wireguardEnabled"></label>
+                <label>Chave Privada do Cliente: 
+                    <input type="text" id="wireguardPrivateKey" placeholder="Base64 (44 caracteres)" style="font-family: monospace; font-size: 11px;">
+                    <small style="color: #666; display: block; margin-top: 5px;">Chave privada gerada no cliente (ESP32)</small>
+                </label>
+                <label>Chave Publica do Servidor: 
+                    <input type="text" id="wireguardPublicKey" placeholder="Base64 (44 caracteres)" style="font-family: monospace; font-size: 11px;">
+                    <small style="color: #666; display: block; margin-top: 5px;">Chave pública do servidor WireGuard</small>
+                </label>
+                <label>Endereco do Servidor: 
+                    <input type="text" id="wireguardServerAddress" placeholder="exemplo.com ou 192.168.1.100">
+                    <small style="color: #666; display: block; margin-top: 5px;">IP ou domínio do servidor WireGuard</small>
+                </label>
+                <label>Porta do Servidor: 
+                    <input type="number" id="wireguardServerPort" placeholder="51820" min="1" max="65535" value="51820">
+                </label>
+                <label>IP Local na VPN: 
+                    <input type="text" id="wireguardLocalIP" placeholder="10.0.0.2" pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$">
+                    <small style="color: #666; display: block; margin-top: 5px;">IP que o ESP32 terá na rede VPN</small>
+                </label>
+                <label>IP Gateway na VPN: 
+                    <input type="text" id="wireguardGatewayIP" placeholder="10.0.0.1" pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$">
+                    <small style="color: #666; display: block; margin-top: 5px;">IP do servidor/gateway na rede VPN</small>
+                </label>
+                <label>Mascara de Sub-rede: 
+                    <input type="text" id="wireguardSubnetMask" placeholder="255.255.255.0" pattern="^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$" value="255.255.255.0">
+                </label>
+            </div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 5px; border: 1px solid #ffc107;">
+                <h4 style="margin: 0 0 10px 0; color: #856404;">📋 Informacoes Importantes</h4>
+                <ul style="margin: 0; padding-left: 20px; color: #856404; font-size: 13px;">
+                    <li>O WireGuard requer que o WiFi esteja conectado</li>
+                    <li>O NTP deve estar sincronizado (WireGuard precisa de tempo preciso)</li>
+                    <li>As chaves devem ser no formato Base64 (44 caracteres)</li>
+                    <li>Configure o servidor WireGuard na VPS antes de usar</li>
+                    <li>A conexao e tentada automaticamente apos salvar se habilitado</li>
+                </ul>
+            </div>
+        </div>
+
         <!-- Seção Console -->
         <div id="console" class="section">
             <h2>Console do Sistema</h2>
@@ -418,6 +478,21 @@
             
             if (section === 'wifi') {
                 scanWiFi();
+            }
+            
+            if (section === 'wireguard') {
+                updateWireGuardStatus();
+                // Atualiza status a cada 5 segundos quando a seção estiver aberta
+                if (window.wireguardStatusInterval) {
+                    clearInterval(window.wireguardStatusInterval);
+                }
+                window.wireguardStatusInterval = setInterval(updateWireGuardStatus, 5000);
+            } else {
+                // Para atualização quando sair da seção
+                if (window.wireguardStatusInterval) {
+                    clearInterval(window.wireguardStatusInterval);
+                    window.wireguardStatusInterval = null;
+                }
             }
         }
         
@@ -572,6 +647,103 @@
         document.getElementById('ntpEnabled').addEventListener('change', function() {
             document.getElementById('manualTime').style.display = this.checked ? 'none' : 'block';
         });
+
+        // ==================== WIREGUARD VPN ====================
+        async function updateWireGuardStatus() {
+            try {
+                const response = await fetch('/api/wireguard/status');
+                const data = await response.json();
+                
+                const statusDisplay = document.getElementById('wireguardStatusDisplay');
+                if (statusDisplay) {
+                    let statusText = data.status || 'Desconhecido';
+                    let statusColor = '#666';
+                    
+                    if (data.status && data.status.includes('Conectado')) {
+                        statusColor = '#4CAF50';
+                        statusText = '🟢 ' + statusText;
+                    } else if (data.status && data.status.includes('Desconectado')) {
+                        statusColor = '#F44336';
+                        statusText = '🔴 ' + statusText;
+                    } else if (data.status && (data.status.includes('Aguardando') || data.status.includes('Desabilitado'))) {
+                        statusColor = '#FF9800';
+                        statusText = '🟡 ' + statusText;
+                    }
+                    
+                    statusDisplay.textContent = statusText;
+                    statusDisplay.style.color = statusColor;
+                    
+                    // Se conectado, mostra IP local
+                    if (data.localIP) {
+                        statusDisplay.textContent += ' (' + data.localIP + ')';
+                    }
+                }
+            } catch (error) {
+                const statusDisplay = document.getElementById('wireguardStatusDisplay');
+                if (statusDisplay) {
+                    statusDisplay.textContent = 'Erro ao carregar status';
+                    statusDisplay.style.color = '#F44336';
+                }
+                console.error('Erro ao atualizar status WireGuard:', error);
+            }
+        }
+
+        async function connectWireGuard() {
+            try {
+                const response = await fetch('/api/wireguard/connect', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    showStatus('WireGuard conectado com sucesso!');
+                    updateWireGuardStatus();
+                    // Atualiza status após 1 segundo
+                    setTimeout(updateWireGuardStatus, 1000);
+                } else {
+                    showStatus('Erro ao conectar: ' + (data.message || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao conectar WireGuard: ' + error, true);
+            }
+        }
+
+        async function disconnectWireGuard() {
+            try {
+                const response = await fetch('/api/wireguard/disconnect', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.status === 'ok') {
+                    showStatus('WireGuard desconectado');
+                    updateWireGuardStatus();
+                    // Atualiza status após 1 segundo
+                    setTimeout(updateWireGuardStatus, 1000);
+                } else {
+                    showStatus('Erro ao desconectar: ' + (data.message || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao desconectar WireGuard: ' + error, true);
+            }
+        }
+
+        async function syncNTPNow() {
+            try {
+                const response = await fetch('/api/rtc/sync', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    showStatus('NTP sincronizado com sucesso!');
+                    updateCurrentTime();
+                } else {
+                    showStatus('Erro ao sincronizar NTP: ' + (data.message || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao sincronizar NTP: ' + error, true);
+            }
+        }
 
         function showStatus(message, isError) {
             isError = isError || false;
@@ -824,7 +996,24 @@
                     // Não carrega data/hora manual pois ela é calculada dinamicamente
                     // Mas pode ser usada para definir manualmente se necessário
                 }
-                
+
+                // WireGuard
+                if (data.wireguard) {
+                    document.getElementById('wireguardEnabled').checked = data.wireguard.enabled || false;
+                    document.getElementById('wireguardPrivateKey').value = data.wireguard.privateKey || '';
+                    document.getElementById('wireguardPublicKey').value = data.wireguard.publicKey || '';
+                    document.getElementById('wireguardServerAddress').value = data.wireguard.serverAddress || '';
+                    document.getElementById('wireguardServerPort').value = data.wireguard.serverPort || 51820;
+                    document.getElementById('wireguardLocalIP').value = data.wireguard.localIP || '10.0.0.2';
+                    document.getElementById('wireguardGatewayIP').value = data.wireguard.gatewayIP || '10.0.0.1';
+                    document.getElementById('wireguardSubnetMask').value = data.wireguard.subnetMask || '255.255.255.0';
+                    
+                    // Atualiza status se disponível
+                    if (data.wireguard.status) {
+                        document.getElementById('wireguardStatusDisplay').textContent = data.wireguard.status;
+                    }
+                }
+
                 showStatus('Configuracao carregada');
             } catch (error) {
                 showStatus('Erro ao carregar: ' + error, true);
@@ -919,6 +1108,16 @@
                         date: document.getElementById('rtcDate').value,
                         time: document.getElementById('rtcTime').value
                     },
+                    wireguard: {
+                        enabled: document.getElementById('wireguardEnabled').checked,
+                        privateKey: document.getElementById('wireguardPrivateKey').value,
+                        publicKey: document.getElementById('wireguardPublicKey').value,
+                        serverAddress: document.getElementById('wireguardServerAddress').value,
+                        serverPort: parseInt(document.getElementById('wireguardServerPort').value) || 51820,
+                        localIP: document.getElementById('wireguardLocalIP').value,
+                        gatewayIP: document.getElementById('wireguardGatewayIP').value,
+                        subnetMask: document.getElementById('wireguardSubnetMask').value
+                    },
                     calculationCode: document.getElementById('calculationCode').value
                 };
                 
@@ -971,6 +1170,16 @@
                             ntpEnabled: document.getElementById('ntpEnabled').checked,
                             date: document.getElementById('rtcDate').value,
                             time: document.getElementById('rtcTime').value
+                        },
+                        wireguard: {
+                            enabled: document.getElementById('wireguardEnabled').checked,
+                            privateKey: document.getElementById('wireguardPrivateKey').value,
+                            publicKey: document.getElementById('wireguardPublicKey').value,
+                            serverAddress: document.getElementById('wireguardServerAddress').value,
+                            serverPort: parseInt(document.getElementById('wireguardServerPort').value) || 51820,
+                            localIP: document.getElementById('wireguardLocalIP').value,
+                            gatewayIP: document.getElementById('wireguardGatewayIP').value,
+                            subnetMask: document.getElementById('wireguardSubnetMask').value
                         },
                         calculationCode: document.getElementById('calculationCode').value
                     })

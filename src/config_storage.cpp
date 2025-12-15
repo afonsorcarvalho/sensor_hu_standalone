@@ -46,6 +46,16 @@ void loadConfig() {
         config.rtc.epochTime = 0;  // Não inicializado
         config.rtc.bootTime = 0;
         
+        // Configurações padrão WireGuard
+        config.wireguard.enabled = false;
+        strcpy(config.wireguard.privateKey, "");
+        strcpy(config.wireguard.publicKey, "");
+        strcpy(config.wireguard.serverAddress, "");
+        config.wireguard.serverPort = 51820;
+        config.wireguard.localIP = IPAddress(10, 10, 0, 2);
+        config.wireguard.gatewayIP = IPAddress(10, 10, 0, 1);
+        config.wireguard.subnetMask = IPAddress(255, 255, 255, 0);
+        
         // Código de cálculo vazio por padrão
         config.calculationCode[0] = '\0';
         
@@ -144,6 +154,51 @@ void loadConfig() {
         config.rtc.timezone = rtcObj["timezone"] | -3;
         strncpy(config.rtc.ntpServer, rtcObj["ntpServer"] | "pool.ntp.org", sizeof(config.rtc.ntpServer) - 1);
         config.rtc.ntpEnabled = rtcObj["ntpEnabled"] | true;
+    }
+    
+    // Carrega configuração WireGuard
+    if (doc.containsKey("wireguard")) {
+        JsonObject wgObj = doc["wireguard"];
+        config.wireguard.enabled = wgObj["enabled"] | false;
+        strncpy(config.wireguard.privateKey, wgObj["privateKey"] | "", sizeof(config.wireguard.privateKey) - 1);
+        config.wireguard.privateKey[sizeof(config.wireguard.privateKey) - 1] = '\0';
+        strncpy(config.wireguard.publicKey, wgObj["publicKey"] | "", sizeof(config.wireguard.publicKey) - 1);
+        config.wireguard.publicKey[sizeof(config.wireguard.publicKey) - 1] = '\0';
+        strncpy(config.wireguard.serverAddress, wgObj["serverAddress"] | "", sizeof(config.wireguard.serverAddress) - 1);
+        config.wireguard.serverAddress[sizeof(config.wireguard.serverAddress) - 1] = '\0';
+        config.wireguard.serverPort = wgObj["serverPort"] | 51820;
+        
+        // Carrega IPs (formato: "10.0.0.2")
+        if (wgObj.containsKey("localIP")) {
+            const char* localIPStr = wgObj["localIP"] | "10.0.0.2";
+            config.wireguard.localIP.fromString(localIPStr);
+        } else {
+            config.wireguard.localIP = IPAddress(10, 0, 0, 2);
+        }
+        
+        if (wgObj.containsKey("gatewayIP")) {
+            const char* gatewayIPStr = wgObj["gatewayIP"] | "10.0.0.1";
+            config.wireguard.gatewayIP.fromString(gatewayIPStr);
+        } else {
+            config.wireguard.gatewayIP = IPAddress(10, 0, 0, 1);
+        }
+        
+        if (wgObj.containsKey("subnetMask")) {
+            const char* subnetMaskStr = wgObj["subnetMask"] | "255.255.255.0";
+            config.wireguard.subnetMask.fromString(subnetMaskStr);
+        } else {
+            config.wireguard.subnetMask = IPAddress(255, 255, 255, 0);
+        }
+    } else {
+        // Configurações padrão se não existir no JSON
+        config.wireguard.enabled = false;
+        strcpy(config.wireguard.privateKey, "");
+        strcpy(config.wireguard.publicKey, "");
+        strcpy(config.wireguard.serverAddress, "");
+        config.wireguard.serverPort = 51820;
+        config.wireguard.localIP = IPAddress(10, 0, 0, 2);
+        config.wireguard.gatewayIP = IPAddress(10, 0, 0, 1);
+        config.wireguard.subnetMask = IPAddress(255, 255, 255, 0);
     }
     
     // Carrega código de cálculo
@@ -305,6 +360,17 @@ bool saveConfig() {
     rtcObj["ntpEnabled"] = config.rtc.ntpEnabled;
     rtcObj["epochTime"] = config.rtc.epochTime;
     
+    // Adiciona configuração WireGuard
+    JsonObject wgObj = doc.createNestedObject("wireguard");
+    wgObj["enabled"] = config.wireguard.enabled;
+    wgObj["privateKey"] = String(config.wireguard.privateKey);
+    wgObj["publicKey"] = String(config.wireguard.publicKey);
+    wgObj["serverAddress"] = String(config.wireguard.serverAddress);
+    wgObj["serverPort"] = config.wireguard.serverPort;
+    wgObj["localIP"] = config.wireguard.localIP.toString();
+    wgObj["gatewayIP"] = config.wireguard.gatewayIP.toString();
+    wgObj["subnetMask"] = config.wireguard.subnetMask.toString();
+    
     // Adiciona código de cálculo
     doc["calculationCode"] = String(config.calculationCode);
     
@@ -422,6 +488,16 @@ bool resetConfig() {
     config.rtc.ntpEnabled = true;
     config.rtc.epochTime = 0;
     config.rtc.bootTime = 0;
+    
+    // Configurações padrão WireGuard
+    config.wireguard.enabled = false;
+    strcpy(config.wireguard.privateKey, "");
+    strcpy(config.wireguard.publicKey, "");
+    strcpy(config.wireguard.serverAddress, "");
+    config.wireguard.serverPort = 51820;
+    config.wireguard.localIP = IPAddress(10, 10, 0, 2);
+    config.wireguard.gatewayIP = IPAddress(10, 10, 0, 1);
+    config.wireguard.subnetMask = IPAddress(255, 255, 255, 0);
     
     // Código de cálculo vazio por padrão
     config.calculationCode[0] = '\0';

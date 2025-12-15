@@ -10,6 +10,7 @@
 #include "rtc_manager.h"
 #include "console.h"
 #include "expression_parser.h"
+#include "wireguard_manager.h"
 #include <ArduinoJson.h>
 #include <ESP.h>
 #include <WiFi.h>
@@ -221,6 +222,21 @@ void setupWebServer() {
         handleSyncNTP(request);
     });
     
+    // Rota para obter status do WireGuard
+    server.on("/api/wireguard/status", HTTP_GET, [](AsyncWebServerRequest *request){
+        handleWireGuardStatus(request);
+    });
+    
+    // Rota para conectar WireGuard
+    server.on("/api/wireguard/connect", HTTP_POST, [](AsyncWebServerRequest *request){
+        handleWireGuardConnect(request);
+    });
+    
+    // Rota para desconectar WireGuard
+    server.on("/api/wireguard/disconnect", HTTP_POST, [](AsyncWebServerRequest *request){
+        handleWireGuardDisconnect(request);
+    });
+    
     // Rota para scan de redes WiFi
     server.on("/api/wifi/scan", HTTP_GET, [](AsyncWebServerRequest *request){
         handleWiFiScan(request);
@@ -290,6 +306,18 @@ void handleGetConfig(AsyncWebServerRequest *request) {
     rtcObj["ntpServer"] = config.rtc.ntpServer;
     rtcObj["ntpEnabled"] = config.rtc.ntpEnabled;
     rtcObj["epochTime"] = config.rtc.epochTime;
+    
+    // Adiciona configuração WireGuard
+    JsonObject wgObj = doc.createNestedObject("wireguard");
+    wgObj["enabled"] = config.wireguard.enabled;
+    wgObj["privateKey"] = String(config.wireguard.privateKey);
+    wgObj["publicKey"] = String(config.wireguard.publicKey);
+    wgObj["serverAddress"] = String(config.wireguard.serverAddress);
+    wgObj["serverPort"] = config.wireguard.serverPort;
+    wgObj["localIP"] = config.wireguard.localIP.toString();
+    wgObj["gatewayIP"] = config.wireguard.gatewayIP.toString();
+    wgObj["subnetMask"] = config.wireguard.subnetMask.toString();
+    wgObj["status"] = getWireGuardStatus();
     
     // Adiciona código de cálculo
     doc["calculationCode"] = String(config.calculationCode);
@@ -503,6 +531,55 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
         strncpy(config.rtc.ntpServer, ntpServerStr, sizeof(config.rtc.ntpServer) - 1);
         config.rtc.ntpServer[sizeof(config.rtc.ntpServer) - 1] = '\0';
         config.rtc.ntpEnabled = rtcObj["ntpEnabled"] | true;
+    }
+    
+    // Atualiza configuração WireGuard
+    bool wireguardWasEnabled = config.wireguard.enabled;
+    if (doc.containsKey("wireguard")) {
+        JsonObject wgObj = doc["wireguard"];
+        config.wireguard.enabled = wgObj["enabled"] | false;
+        
+        const char* privateKeyStr = wgObj["privateKey"] | "";
+        strncpy(config.wireguard.privateKey, privateKeyStr, sizeof(config.wireguard.privateKey) - 1);
+        config.wireguard.privateKey[sizeof(config.wireguard.privateKey) - 1] = '\0';
+        
+        const char* publicKeyStr = wgObj["publicKey"] | "";
+        strncpy(config.wireguard.publicKey, publicKeyStr, sizeof(config.wireguard.publicKey) - 1);
+        config.wireguard.publicKey[sizeof(config.wireguard.publicKey) - 1] = '\0';
+        
+        const char* serverAddressStr = wgObj["serverAddress"] | "";
+        strncpy(config.wireguard.serverAddress, serverAddressStr, sizeof(config.wireguard.serverAddress) - 1);
+        config.wireguard.serverAddress[sizeof(config.wireguard.serverAddress) - 1] = '\0';
+        
+        config.wireguard.serverPort = wgObj["serverPort"] | 51820;
+        
+        // Processa IPs
+        if (wgObj.containsKey("localIP")) {
+            const char* localIPStr = wgObj["localIP"] | "10.0.0.2";
+            config.wireguard.localIP.fromString(localIPStr);
+        }
+        
+        if (wgObj.containsKey("gatewayIP")) {
+            const char* gatewayIPStr = wgObj["gatewayIP"] | "10.0.0.1";
+            config.wireguard.gatewayIP.fromString(gatewayIPStr);
+        }
+        
+        if (wgObj.containsKey("subnetMask")) {
+            const char* subnetMaskStr = wgObj["subnetMask"] | "255.255.255.0";
+            config.wireguard.subnetMask.fromString(subnetMaskStr);
+        }
+        
+        Serial.print("[Config] WireGuard configurado - Enabled: ");
+        Serial.print(config.wireguard.enabled);
+        Serial.print(", Server: ");
+        Serial.print(config.wireguard.serverAddress);
+        Serial.print(":");
+        Serial.println(config.wireguard.serverPort);
+        
+        // Se foi habilitado e estava desabilitado antes, tenta conectar
+        if (config.wireguard.enabled && !wireguardWasEnabled && WiFi.status() == WL_CONNECTED) {
+            Serial.println("[Config] WireGuard habilitado, tentando conectar...");
+        }
     }
     
     // Atualiza código de cálculo
@@ -889,6 +966,60 @@ void handleSyncNTP(AsyncWebServerRequest *request) {
         request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"NTP sincronizado com sucesso\"}");
     } else {
         request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Falha ao sincronizar NTP\"}");
+    }
+}
+
+void handleWireGuardStatus(AsyncWebServerRequest *request) {
+    DynamicJsonDocument doc(512);
+    doc["enabled"] = config.wireguard.enabled;
+    doc["status"] = getWireGuardStatus();
+    doc["connected"] = isWireGuardConnected();
+    
+    if (config.wireguard.enabled) {
+        doc["localIP"] = config.wireguard.localIP.toString();
+        doc["serverAddress"] = String(config.wireguard.serverAddress);
+        doc["serverPort"] = config.wireguard.serverPort;
+    }
+    
+    String response;
+    serializeJson(doc, response);
+    request->send(200, "application/json", response);
+}
+
+void handleWireGuardConnect(AsyncWebServerRequest *request) {
+    // Tenta conectar
+    if (!config.wireguard.enabled) {
+        request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"WireGuard não está habilitado\"}");
+        return;
+    }
+    
+    if (WiFi.status() != WL_CONNECTED) {
+        request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"WiFi não está conectado\"}");
+        return;
+    }
+    
+    bool success = setupWireGuard();
+    
+    if (success) {
+        DynamicJsonDocument doc(256);
+        doc["status"] = "ok";
+        doc["message"] = "WireGuard conectado com sucesso";
+        doc["localIP"] = config.wireguard.localIP.toString();
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else {
+        request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Falha ao conectar WireGuard. Verifique configuração e logs.\"}");
+    }
+}
+
+void handleWireGuardDisconnect(AsyncWebServerRequest *request) {
+    if (isWireGuardConnected()) {
+        disconnectWireGuard();
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"WireGuard desconectado\"}");
+    } else {
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"WireGuard já estava desconectado\"}");
     }
 }
 
@@ -1322,6 +1453,17 @@ void handleExportConfig(AsyncWebServerRequest *request) {
     rtcObj["ntpEnabled"] = config.rtc.ntpEnabled;
     rtcObj["epochTime"] = config.rtc.epochTime;
     
+    // Adiciona configuração WireGuard
+    JsonObject wgObj = doc.createNestedObject("wireguard");
+    wgObj["enabled"] = config.wireguard.enabled;
+    wgObj["privateKey"] = String(config.wireguard.privateKey);
+    wgObj["publicKey"] = String(config.wireguard.publicKey);
+    wgObj["serverAddress"] = String(config.wireguard.serverAddress);
+    wgObj["serverPort"] = config.wireguard.serverPort;
+    wgObj["localIP"] = config.wireguard.localIP.toString();
+    wgObj["gatewayIP"] = config.wireguard.gatewayIP.toString();
+    wgObj["subnetMask"] = config.wireguard.subnetMask.toString();
+    
     // Adiciona código de cálculo
     doc["calculationCode"] = String(config.calculationCode);
     
@@ -1676,14 +1818,20 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
         }
         
         // Arrays para armazenar variáveis temporárias (máximo 50 variáveis)
+        // IMPORTANTE: Alocados no heap para evitar stack overflow
         // k[i] = nome da variável (máximo 5 caracteres), v[i] = valor
         const int MAX_TEMP_VARS = 50;
-        char tempVarNames[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
-        double tempVarValues[MAX_TEMP_VARS];
+        char (*tempVarNames)[6] = new char[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
+        double* tempVarValues = new double[MAX_TEMP_VARS];
         int tempVarCount = 0;
         
         // Converte para formato Variable para compatibilidade com substituteDeviceValues
-        Variable tempVariables[MAX_TEMP_VARS];
+        Variable* tempVariables = new Variable[MAX_TEMP_VARS];
+        
+        // Buffers alocados no heap para evitar stack overflow
+        char* lineBuffer = new char[1024];
+        char* processedExpression = new char[2048];
+        char* errorMsg = new char[256];
         
         // Processa múltiplas linhas
         DynamicJsonDocument responseDoc(4096);
@@ -1711,9 +1859,8 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             }
             
             // Converte String para char*
-            char lineBuffer[1024];
-            strncpy(lineBuffer, line.c_str(), sizeof(lineBuffer) - 1);
-            lineBuffer[sizeof(lineBuffer) - 1] = '\0';
+            strncpy(lineBuffer, line.c_str(), 1023);
+            lineBuffer[1023] = '\0';
             
             // Processa esta linha
             JsonObject lineResult = results.createNestedObject();
@@ -1721,8 +1868,8 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             lineResult["expression"] = lineBuffer;
             
             AssignmentInfo assignmentInfo;
-            char errorMsg[256] = "";
-            bool parseSuccess = parseAssignment(lineBuffer, &assignmentInfo, errorMsg, sizeof(errorMsg));
+            errorMsg[0] = '\0';  // Limpa buffer de erro
+            bool parseSuccess = parseAssignment(lineBuffer, &assignmentInfo, errorMsg, 256);
             
             if (!parseSuccess) {
                 lineResult["status"] = "error";
@@ -1735,8 +1882,9 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             
             // Processa expressão
             const char* expressionToProcess = assignmentInfo.hasAssignment ? assignmentInfo.expression : lineBuffer;
-            char processedExpression[2048];
-            bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg), tempVariables, tempVarCount);
+            processedExpression[0] = '\0';  // Limpa buffer
+            errorMsg[0] = '\0';  // Limpa buffer de erro
+            bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, 2048, errorMsg, 256, tempVariables, tempVarCount);
             
             if (!success) {
                 lineResult["status"] = "error";
@@ -1751,7 +1899,8 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             double result = 0.0;
             Variable emptyVars[1];
             int emptyVarCount = 0;
-            bool evalSuccess = evaluateExpression(processedExpression, emptyVars, emptyVarCount, &result, errorMsg, sizeof(errorMsg));
+            errorMsg[0] = '\0';  // Limpa buffer de erro antes de avaliar
+            bool evalSuccess = evaluateExpression(processedExpression, emptyVars, emptyVarCount, &result, errorMsg, 256);
             
             if (!evalSuccess) {
                 lineResult["status"] = "error";
@@ -1832,12 +1981,20 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             lineNumber++;
         }
         
-        // Limpa memória
+        // Limpa memória DeviceValues
         for (int i = 0; i < config.deviceCount; i++) {
             delete[] deviceValues.values[i];
         }
         delete[] deviceValues.values;
         delete[] deviceValues.registerCounts;
+        
+        // Limpa memória dos arrays alocados no heap
+        delete[] tempVarNames;
+        delete[] tempVarValues;
+        delete[] tempVariables;
+        delete[] lineBuffer;
+        delete[] processedExpression;
+        delete[] errorMsg;
         
         // Resposta geral
         responseDoc["status"] = hasErrors ? "partial" : "ok";

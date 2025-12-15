@@ -99,6 +99,21 @@ struct RTCConfig {
 };
 
 /**
+ * @struct WireGuardConfig
+ * @brief Estrutura para configuração WireGuard VPN
+ */
+struct WireGuardConfig {
+    bool enabled;              // WireGuard habilitado
+    char privateKey[45];       // Chave privada do cliente (44 caracteres base64 + null)
+    char publicKey[45];        // Chave pública do servidor (44 caracteres base64 + null)
+    char serverAddress[64];    // IP ou domínio do servidor WireGuard
+    uint16_t serverPort;       // Porta do servidor WireGuard (padrão: 51820)
+    IPAddress localIP;         // IP local na rede VPN (ex: 10.0.0.2)
+    IPAddress gatewayIP;       // IP do gateway/servidor na VPN (ex: 10.0.0.1)
+    IPAddress subnetMask;      // Máscara de sub-rede (ex: 255.255.255.0)
+};
+
+/**
  * @struct SystemConfig
  * @brief Estrutura para configuração do sistema
  */
@@ -109,6 +124,7 @@ struct SystemConfig {
     MQTTConfig mqtt;         // Configuração MQTT
     WiFiConfig wifi;         // Configuração WiFi
     RTCConfig rtc;           // Configuração RTC
+    WireGuardConfig wireguard; // Configuração WireGuard VPN
     char calculationCode[1024];  // Código Python/expressão para cálculos
 };
 

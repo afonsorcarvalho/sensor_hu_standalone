@@ -21,6 +21,7 @@
 #include "rtc_manager.h"
 #include "console.h"
 #include "kalman_filter.h"
+#include "wireguard_manager.h"
 
 // Variáveis globais
 unsigned long lastCalculationTime = 0;
@@ -187,6 +188,21 @@ void setup() {
         consolePrint("[RTC] RTC desabilitado\r\n");
     }
     
+    // Conecta WireGuard VPN (após WiFi e NTP estarem prontos)
+    if (config.wireguard.enabled && WiFi.status() == WL_CONNECTED) {
+        Serial.println("[WireGuard] Tentando conectar VPN...");
+        consolePrint("[WireGuard] Tentando conectar VPN...\r\n");
+        bool vpnConnected = setupWireGuard();
+        if (vpnConnected) {
+            Serial.println("[WireGuard] VPN conectada com sucesso!");
+        } else {
+            Serial.println("[WireGuard] Falha ao conectar VPN. Continuando sem VPN.");
+        }
+    } else if (config.wireguard.enabled) {
+        Serial.println("[WireGuard] Habilitado mas WiFi nao conectado. VPN sera conectada quando WiFi estiver disponivel.");
+        consolePrint("[WireGuard] Habilitado mas aguardando WiFi...\r\n");
+    }
+    
     Serial.println("Sistema inicializado!");
     Serial.flush(); // Força envio imediato
     consolePrint("[Sistema] Sistema inicializado com sucesso!\r\n");
@@ -225,6 +241,19 @@ void loop() {
     if (config.rtc.enabled && config.rtc.ntpEnabled && !rtcInitialized && WiFi.status() == WL_CONNECTED) {
         if (millis() - lastNtpSync > 30000) {  // Tenta a cada 30 segundos se não inicializado
             syncNTP();
+        }
+    }
+    
+    // Tenta conectar WireGuard se habilitado e WiFi/NTP estiverem prontos
+    if (config.wireguard.enabled && WiFi.status() == WL_CONNECTED && !isWireGuardConnected()) {
+        // Verifica se NTP está sincronizado (necessário para WireGuard)
+        if (time(nullptr) > 1000000000) {
+            static unsigned long lastVpnAttempt = 0;
+            if (millis() - lastVpnAttempt > 60000) {  // Tenta a cada 60 segundos
+                lastVpnAttempt = millis();
+                Serial.println("[WireGuard] Tentando reconectar VPN...");
+                setupWireGuard();
+            }
         }
     }
     

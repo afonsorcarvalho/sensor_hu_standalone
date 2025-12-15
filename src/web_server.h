@@ -74,6 +74,21 @@ void handleSyncNTP(AsyncWebServerRequest *request);
 void handleWiFiScan(AsyncWebServerRequest *request);
 
 /**
+ * @brief Handler para obter status do WireGuard (GET /api/wireguard/status)
+ */
+void handleWireGuardStatus(AsyncWebServerRequest *request);
+
+/**
+ * @brief Handler para conectar WireGuard (POST /api/wireguard/connect)
+ */
+void handleWireGuardConnect(AsyncWebServerRequest *request);
+
+/**
+ * @brief Handler para desconectar WireGuard (POST /api/wireguard/disconnect)
+ */
+void handleWireGuardDisconnect(AsyncWebServerRequest *request);
+
+/**
  * @brief Restaura o estado WiFi original após operações como scan
  * @param originalMode Modo WiFi original (AP, STA, AP_STA)
  * @param wasConnected Se estava conectado a uma rede antes

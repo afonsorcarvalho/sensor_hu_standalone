@@ -41,14 +41,20 @@ void performCalculations() {
     }
     
     // Arrays para armazenar variáveis temporárias (máximo 50 variáveis)
+    // IMPORTANTE: Alocados no heap para evitar stack overflow
     // k[i] = nome da variável (máximo 5 caracteres), v[i] = valor
     const int MAX_TEMP_VARS = 50;
-    char tempVarNames[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
-    double tempVarValues[MAX_TEMP_VARS];
+    char (*tempVarNames)[6] = new char[MAX_TEMP_VARS][6];  // 5 caracteres + null terminator
+    double* tempVarValues = new double[MAX_TEMP_VARS];
     int tempVarCount = 0;
     
     // Converte para formato Variable para compatibilidade com substituteDeviceValues
-    Variable tempVariables[MAX_TEMP_VARS];
+    Variable* tempVariables = new Variable[MAX_TEMP_VARS];
+    
+    // Buffers alocados no heap para evitar stack overflow
+    char* lineBuffer = new char[1024];
+    char* processedExpression = new char[2048];
+    char* errorMsg = new char[256];
     
     // Divide o código em linhas e processa cada uma separadamente
     String codeStr = String(config.calculationCode);
@@ -80,14 +86,13 @@ void performCalculations() {
         }
         
         // Converte String para char* para processar
-        char lineBuffer[1024];
-        strncpy(lineBuffer, line.c_str(), sizeof(lineBuffer) - 1);
-        lineBuffer[sizeof(lineBuffer) - 1] = '\0';
+        strncpy(lineBuffer, line.c_str(), 1023);
+        lineBuffer[1023] = '\0';
         
         // Processa esta linha
         AssignmentInfo assignmentInfo;
-        char errorMsg[256] = "";
-        bool parseSuccess = parseAssignment(lineBuffer, &assignmentInfo, errorMsg, sizeof(errorMsg));
+        errorMsg[0] = '\0';  // Limpa buffer de erro
+        bool parseSuccess = parseAssignment(lineBuffer, &assignmentInfo, errorMsg, 256);
         
         if (!parseSuccess) {
             // Log de erro no console (mas continua processando outras linhas)
@@ -101,8 +106,9 @@ void performCalculations() {
         const char* expressionToProcess = assignmentInfo.hasAssignment ? assignmentInfo.expression : lineBuffer;
         
         // Substitui {d[i][j]} e variáveis temporárias na expressão pelos valores
-        char processedExpression[2048];
-        bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, sizeof(processedExpression), errorMsg, sizeof(errorMsg), tempVariables, tempVarCount);
+        processedExpression[0] = '\0';  // Limpa buffer
+        errorMsg[0] = '\0';  // Limpa buffer de erro
+        bool success = substituteDeviceValues(expressionToProcess, &deviceValues, processedExpression, 2048, errorMsg, 256, tempVariables, tempVarCount);
         
         if (!success) {
             // Log de erro no console (mas continua processando outras linhas)
@@ -127,6 +133,9 @@ void performCalculations() {
             lineNumber++;
             continue;
         }
+        
+        // Limpa buffer de erro antes de próxima iteração
+        errorMsg[0] = '\0';
         
         // Se há atribuição, processa
         if (assignmentInfo.hasAssignment) {
@@ -297,5 +306,13 @@ void performCalculations() {
     }
     delete[] deviceValues.values;
     delete[] deviceValues.registerCounts;
+    
+    // Limpa memória dos arrays alocados no heap
+    delete[] tempVarNames;
+    delete[] tempVarValues;
+    delete[] tempVariables;
+    delete[] lineBuffer;
+    delete[] processedExpression;
+    delete[] errorMsg;
 }
 

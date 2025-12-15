@@ -317,16 +317,8 @@ def plotar_calibracao_comparativa(pontos_calibracao, resultados_todos_metodos):
     # Gráfico 1: UR Real vs UR Calculado (dispersão)
     ax1 = axes[0]
     
-    # Linha de referência (y = x) - linha perfeita
-    min_val = min(UR_reais)
-    max_val = max(UR_reais)
-    # Ajusta limites para incluir todos os valores calculados
-    for metodo, resultado in resultados_todos_metodos.items():
-        UR_calc = np.array(resultado['UR_calculados'])
-        min_val = min(min_val, min(UR_calc))
-        max_val = max(max_val, max(UR_calc))
-    
-    ax1.plot([min_val, max_val], [min_val, max_val], 'k--', linewidth=2, 
+    # Linha de referência (y = x) - linha perfeita de 0 a 100% (UR não pode ser negativa nem acima de 100%)
+    ax1.plot([0, 100], [0, 100], 'k--', linewidth=2, 
             label='Linha Perfeita (y=x)', alpha=0.5, zorder=1)
     
     # Plota pontos para cada método
@@ -346,6 +338,9 @@ def plotar_calibracao_comparativa(pontos_calibracao, resultados_todos_metodos):
     ax1.grid(True, alpha=0.3, linestyle='--')
     ax1.legend(loc='best', fontsize=9)
     ax1.set_aspect('equal', adjustable='box')
+    # Limita eixos entre 0 e 100% (UR não pode ser negativa nem acima de 100%)
+    ax1.set_xlim(0, 100)
+    ax1.set_ylim(0, 100)
     
     # Gráfico 2: Erro por ponto para cada método
     ax2 = axes[1]
@@ -434,10 +429,8 @@ def plotar_calibracao(pontos_calibracao, resultado):
     ax1 = axes[0, 0]
     ax1.scatter(UR_reais, UR_calculados, s=100, alpha=0.7, color='blue', edgecolors='black', linewidths=2)
     
-    # Linha de referência (y = x) - linha perfeita
-    min_val = min(min(UR_reais), min(UR_calculados))
-    max_val = max(max(UR_reais), max(UR_calculados))
-    ax1.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Linha Perfeita (y=x)')
+    # Linha de referência (y = x) - linha perfeita de 0 a 100% (UR não pode ser negativa nem acima de 100%)
+    ax1.plot([0, 100], [0, 100], 'r--', linewidth=2, label='Linha Perfeita (y=x)')
     
     # Anota cada ponto com valores de TS, TU
     for i, (ur_real, ur_calc, ts, tu) in enumerate(zip(UR_reais, UR_calculados, TS_pontos, TU_pontos)):
@@ -452,6 +445,9 @@ def plotar_calibracao(pontos_calibracao, resultado):
     ax1.grid(True, alpha=0.3, linestyle='--')
     ax1.legend()
     ax1.set_aspect('equal', adjustable='box')
+    # Limita eixos entre 0 e 100% (UR não pode ser negativa nem acima de 100%)
+    ax1.set_xlim(0, 100)
+    ax1.set_ylim(0, 100)
     
     # Gráfico 2: Erro por ponto
     ax2 = axes[0, 1]
@@ -499,6 +495,8 @@ def plotar_calibracao(pontos_calibracao, resultado):
     ax3.set_title('UR vs TS (Comparação Real vs Calculado)', fontsize=12, fontweight='bold')
     ax3.grid(True, alpha=0.3, linestyle='--')
     ax3.legend()
+    # Limita eixo Y entre 0 e 100% (UR não pode ser negativa nem acima de 100%)
+    ax3.set_ylim(0, 100)
     
     # Gráfico 4: UR vs TU (mostrando pontos reais e calculados)
     ax4 = axes[1, 1]
@@ -521,6 +519,8 @@ def plotar_calibracao(pontos_calibracao, resultado):
     ax4.set_title('UR vs TU (Comparação Real vs Calculado)', fontsize=12, fontweight='bold')
     ax4.grid(True, alpha=0.3, linestyle='--')
     ax4.legend()
+    # Limita eixo Y entre 0 e 100% (UR não pode ser negativa nem acima de 100%)
+    ax4.set_ylim(0, 100)
     
     # Adiciona informações das constantes no título geral
     metodo_nome = resultado.get('metodo', 'desconhecido')
