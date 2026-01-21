@@ -1,0 +1,28 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Levenberg-Marquardt (LM)
+# Pontos de calibração: 8
+# Erro médio absoluto: 47.1924%
+# Erro máximo absoluto: 58.8917%
+# Erro RMS: 47.8021%
+
+# Constantes ajustadas:
+A = 100.000000
+B = 0.010000
+C = 1.000000
+D = 0.000800
+
+# Pontos de calibração utilizados:
+# TS = Temperatura do bulbo seco (°C)
+# TU = Temperatura do bulbo úmido (°C)
+# UR_Real = Umidade relativa real medida (%)
+# UR_Calculado = Umidade relativa calculada (%)
+# Erro_Absoluto = |UR_Real - UR_Calculado| (%)
+#     TS (°C)         TU (°C)         UR_Real (%)        UR_Calculado (%)     Erro_Absoluto (%)   
+1     26.100000       21.200000       48.800000          99.987973            51.187973           
+2     29.540000       26.680000       64.700000          99.994351            35.294351           
+3     28.670000       25.330000       60.100000          99.993078            39.893078           
+4     27.700000       23.690000       45.100000          99.991164            54.891164           
+5     26.850000       23.190000       41.100000          99.991667            58.891667           
+6     25.400000       22.100000       49.500000          99.991974            50.491974           
+7     30.800000       27.630000       53.600000          99.994007            46.394007           
+8     31.100000       28.300000       59.500000          99.994805            40.494805           

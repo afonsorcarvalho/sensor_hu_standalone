@@ -154,8 +154,12 @@ void consolePrint(String message) {
     consoleBuffer += message;
     
     // Envia para todos os clientes conectados
+    // IMPORTANTE: textAll() é não bloqueante, mas yield() ajuda o WebSocket processar
     if (webSocket) {
         webSocket->textAll(message);
+        // Pequeno yield para permitir que o WebSocket processe a mensagem
+        // Isso evita que o buffer do WebSocket encha e cause desconexão
+        yield();
     }
     
     // Limita o tamanho do buffer

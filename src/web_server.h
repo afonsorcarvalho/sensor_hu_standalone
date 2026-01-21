@@ -126,5 +126,13 @@ void handleResetConfig(AsyncWebServerRequest *request);
  */
 void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t len);
 
+/**
+ * @brief Handler para scan Modbus RTU (POST /api/modbus/scan)
+ */
+
+/**
+ * @brief Handler para cancelar scan Modbus RTU (POST /api/modbus/scan/cancel)
+ */
+
 #endif // WEB_SERVER_H
 

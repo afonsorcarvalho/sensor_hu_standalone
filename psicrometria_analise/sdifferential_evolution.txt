@@ -1,0 +1,28 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Differential Evolution
+# Pontos de calibração: 8
+# Erro médio absoluto: 5.0433%
+# Erro máximo absoluto: 9.5138%
+# Erro RMS: 5.7819%
+
+# Constantes ajustadas:
+A = 67.201508
+B = 51.525018
+C = 224.122742
+D = 0.000800
+
+# Pontos de calibração utilizados:
+# TS = Temperatura do bulbo seco (°C)
+# TU = Temperatura do bulbo úmido (°C)
+# UR_Real = Umidade relativa real medida (%)
+# UR_Calculado = Umidade relativa calculada (%)
+# Erro_Absoluto = |UR_Real - UR_Calculado| (%)
+#     TS (°C)         TU (°C)         UR_Real (%)        UR_Calculado (%)     Erro_Absoluto (%)   
+1     26.100000       21.200000       48.800000          39.780304            9.019696            
+2     29.540000       26.680000       64.700000          59.503435            5.196565            
+3     28.670000       25.330000       60.100000          54.245903            5.854097            
+4     27.700000       23.690000       45.100000          47.613936            2.513936            
+5     26.850000       23.190000       41.100000          50.613823            9.513823            
+6     25.400000       22.100000       49.500000          53.779982            4.279982            
+7     30.800000       27.630000       53.600000          56.529843            2.929843            
+8     31.100000       28.300000       59.500000          60.538134            1.038134            

@@ -13,6 +13,7 @@
 #include "wireguard_manager.h"
 #include <ArduinoJson.h>
 #include <ESP.h>
+#include <HardwareSerial.h>
 #include <WiFi.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
@@ -279,6 +280,12 @@ void handleRoot(AsyncWebServerRequest *request) {
 void handleGetConfig(AsyncWebServerRequest *request) {
     DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
     doc["baudRate"] = config.baudRate;
+    // Configurações seriais do Modbus
+    doc["dataBits"] = config.dataBits;
+    doc["stopBits"] = config.stopBits;
+    doc["parity"] = config.parity;
+    doc["startBits"] = config.startBits;
+    doc["timeout"] = config.timeout;
     doc["deviceCount"] = config.deviceCount;
     
     // Adiciona configuração MQTT
@@ -346,6 +353,10 @@ void handleGetConfig(AsyncWebServerRequest *request) {
             regObj["kalmanEnabled"] = config.devices[i].registers[j].kalmanEnabled;
             regObj["kalmanQ"] = config.devices[i].registers[j].kalmanQ;
             regObj["kalmanR"] = config.devices[i].registers[j].kalmanR;
+            regObj["writeFunction"] = config.devices[i].registers[j].writeFunction;
+            regObj["writeRegisterCount"] = config.devices[i].registers[j].writeRegisterCount;
+            regObj["registerType"] = config.devices[i].registers[j].registerType;
+            regObj["registerCount"] = config.devices[i].registers[j].registerCount;
         }
         
         // IMPORTANTE: registerCount baseado no tamanho real do array
@@ -421,11 +432,42 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
     
     // Atualiza configuração do sistema
     uint32_t newBaudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
-    config.baudRate = newBaudRate;
+    uint8_t newDataBits = doc["dataBits"] | MODBUS_DATA_BITS_DEFAULT;
+    uint8_t newStopBits = doc["stopBits"] | MODBUS_STOP_BITS_DEFAULT;
+    uint8_t newParity = doc["parity"] | MODBUS_PARITY_NONE;
+    uint8_t newStartBits = doc["startBits"] | MODBUS_START_BITS_DEFAULT;
     
-    // Se o baud rate mudou, reconfigura o Modbus
-    if (newBaudRate != currentBaudRate) {
-        setupModbus(newBaudRate);
+    // Sanitiza valores para manter compatibilidade com UART do ESP32
+    if (newDataBits != 7 && newDataBits != 8) newDataBits = MODBUS_DATA_BITS_DEFAULT;
+    if (newStopBits != 1 && newStopBits != 2) newStopBits = MODBUS_STOP_BITS_DEFAULT;
+    if (newParity != MODBUS_PARITY_NONE && newParity != MODBUS_PARITY_EVEN && newParity != MODBUS_PARITY_ODD) {
+        newParity = MODBUS_PARITY_NONE;
+    }
+    // Start bit não é configurável em UART, mantém 1
+    newStartBits = MODBUS_START_BITS_DEFAULT;
+    uint16_t newTimeout = doc["timeout"] | 50;  // Timeout padrão: 50ms
+    
+    // Sanitiza timeout (10-1000ms)
+    if (newTimeout < 10) newTimeout = 10;
+    if (newTimeout > 1000) newTimeout = 1000;
+    
+    config.baudRate = newBaudRate;
+    config.dataBits = newDataBits;
+    config.stopBits = newStopBits;
+    config.parity = newParity;
+    config.startBits = newStartBits;
+    config.timeout = newTimeout;
+    
+    // Se parâmetros seriais mudaram, reconfigura o Modbus
+    uint32_t newSerialConfig = buildSerialConfig(newDataBits, newParity, newStopBits);
+    if (newBaudRate != currentBaudRate || newSerialConfig != currentSerialConfig) {
+        setupModbus(newBaudRate, newSerialConfig);
+    } else {
+        // Se apenas o timeout mudou, atualiza o timeout do Serial2
+        // (setupModbus já atualiza o timeout, mas só é chamado se outros parâmetros mudarem)
+        if (Serial2) {
+            Serial2.setTimeout(newTimeout);
+        }
     }
     
     // Atualiza configuração MQTT
@@ -717,6 +759,44 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
                 config.devices[i].registers[j].kalmanR = 0.1f;
             }
             
+            // Carrega writeFunction (padrão: 0x06 - Write Single Register)
+            if (regObj.containsKey("writeFunction")) {
+                config.devices[i].registers[j].writeFunction = regObj["writeFunction"] | 0x06;
+            } else {
+                config.devices[i].registers[j].writeFunction = 0x06;
+            }
+            
+            // Carrega writeRegisterCount (padrão: 1)
+            if (regObj.containsKey("writeRegisterCount")) {
+                config.devices[i].registers[j].writeRegisterCount = regObj["writeRegisterCount"] | 1;
+            } else {
+                config.devices[i].registers[j].writeRegisterCount = 1;
+            }
+            
+            // Carrega registerType (padrão: 2 - Leitura e Escrita)
+            if (regObj.containsKey("registerType")) {
+                config.devices[i].registers[j].registerType = regObj["registerType"] | 2;
+            } else {
+                // Migração: converte campos antigos para novo formato
+                if (!config.devices[i].registers[j].isInput) {
+                    config.devices[i].registers[j].registerType = 0; // Input Register = somente leitura
+                } else if (config.devices[i].registers[j].readOnly) {
+                    config.devices[i].registers[j].registerType = 0; // somente leitura
+                } else if (config.devices[i].registers[j].isOutput && !config.devices[i].registers[j].readOnly) {
+                    config.devices[i].registers[j].registerType = 1; // somente escrita
+                } else {
+                    config.devices[i].registers[j].registerType = 2; // leitura e escrita
+                }
+            }
+            
+            // Carrega registerCount (padrão: 1)
+            if (regObj.containsKey("registerCount")) {
+                config.devices[i].registers[j].registerCount = regObj["registerCount"] | 1;
+            } else {
+                // Usa writeRegisterCount se registerCount não existir (migração)
+                config.devices[i].registers[j].registerCount = config.devices[i].registers[j].writeRegisterCount;
+            }
+            
             Serial.print("[Config]   Registro ");
             Serial.print(j);
             Serial.print(": endereco=");
@@ -771,7 +851,14 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
 }
 
 void handleReadRegisters(AsyncWebServerRequest *request) {
+    // CRÍTICO: Permite que outras tarefas executem durante a leitura Modbus
+    // Isso evita que o webserver trave completamente se houver timeout no Modbus
+    yield();
+    
     readAllDevices();
+    
+    // CRÍTICO: Yield após leitura para garantir responsividade do webserver
+    yield();
     
     DynamicJsonDocument doc(4096);
     doc["status"] = "ok";
@@ -794,7 +881,6 @@ void handleReadRegisters(AsyncWebServerRequest *request) {
     serializeJson(doc, response);
     request->send(200, "application/json", response);
 }
-
 void handleReboot(AsyncWebServerRequest *request) {
     // Salva a configuração antes de reiniciar (garante que está persistida)
     Serial.println("Salvando configuração antes do reboot...");
@@ -1398,6 +1484,7 @@ void handleGetVariables(AsyncWebServerRequest *request) {
             reg["enabled"] = config.devices[i].enabled;
             reg["isOutput"] = config.devices[i].registers[j].isOutput;
             reg["readOnly"] = config.devices[i].registers[j].readOnly;
+            reg["generateGraph"] = config.devices[i].registers[j].generateGraph;
             
             // Nome da variável (sempre inclui, mesmo se vazio)
             reg["variableName"] = String(config.devices[i].registers[j].variableName);
@@ -1425,6 +1512,12 @@ void handleExportConfig(AsyncWebServerRequest *request) {
     // Retorna a configuração completa como JSON
     DynamicJsonDocument doc(24576);
     doc["baudRate"] = config.baudRate;
+    // Configurações seriais do Modbus
+    doc["dataBits"] = config.dataBits;
+    doc["stopBits"] = config.stopBits;
+    doc["parity"] = config.parity;
+    doc["startBits"] = config.startBits;
+    doc["timeout"] = config.timeout;
     doc["deviceCount"] = config.deviceCount;
     
     // Adiciona configuração MQTT
@@ -1490,6 +1583,10 @@ void handleExportConfig(AsyncWebServerRequest *request) {
             regObj["kalmanEnabled"] = config.devices[i].registers[j].kalmanEnabled;
             regObj["kalmanQ"] = config.devices[i].registers[j].kalmanQ;
             regObj["kalmanR"] = config.devices[i].registers[j].kalmanR;
+            regObj["writeFunction"] = config.devices[i].registers[j].writeFunction;
+            regObj["writeRegisterCount"] = config.devices[i].registers[j].writeRegisterCount;
+            regObj["registerType"] = config.devices[i].registers[j].registerType;
+            regObj["registerCount"] = config.devices[i].registers[j].registerCount;
         }
         
         // IMPORTANTE: registerCount baseado no tamanho real do array
@@ -1520,10 +1617,41 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
         
         // Processa a configuração (mesma lógica de handleSaveConfig)
         uint32_t newBaudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
-        config.baudRate = newBaudRate;
+        uint8_t newDataBits = doc["dataBits"] | MODBUS_DATA_BITS_DEFAULT;
+        uint8_t newStopBits = doc["stopBits"] | MODBUS_STOP_BITS_DEFAULT;
+        uint8_t newParity = doc["parity"] | MODBUS_PARITY_NONE;
+        uint8_t newStartBits = doc["startBits"] | MODBUS_START_BITS_DEFAULT;
         
-        if (newBaudRate != currentBaudRate) {
-            setupModbus(newBaudRate);
+        // Sanitiza valores para manter compatibilidade com UART do ESP32
+        if (newDataBits != 7 && newDataBits != 8) newDataBits = MODBUS_DATA_BITS_DEFAULT;
+        if (newStopBits != 1 && newStopBits != 2) newStopBits = MODBUS_STOP_BITS_DEFAULT;
+        if (newParity != MODBUS_PARITY_NONE && newParity != MODBUS_PARITY_EVEN && newParity != MODBUS_PARITY_ODD) {
+            newParity = MODBUS_PARITY_NONE;
+        }
+        // Start bit não é configurável em UART, mantém 1
+        newStartBits = MODBUS_START_BITS_DEFAULT;
+        uint16_t newTimeout = doc["timeout"] | 50;  // Timeout padrão: 50ms
+        
+        // Sanitiza timeout (10-1000ms)
+        if (newTimeout < 10) newTimeout = 10;
+        if (newTimeout > 1000) newTimeout = 1000;
+        
+        config.baudRate = newBaudRate;
+        config.dataBits = newDataBits;
+        config.stopBits = newStopBits;
+        config.parity = newParity;
+        config.startBits = newStartBits;
+        config.timeout = newTimeout;
+        
+        uint32_t newSerialConfig = buildSerialConfig(newDataBits, newParity, newStopBits);
+        if (newBaudRate != currentBaudRate || newSerialConfig != currentSerialConfig) {
+            setupModbus(newBaudRate, newSerialConfig);
+        } else {
+            // Se apenas o timeout mudou, atualiza o timeout do Serial2
+            // (setupModbus já atualiza o timeout, mas só é chamado se outros parâmetros mudarem)
+            if (Serial2) {
+                Serial2.setTimeout(newTimeout);
+            }
         }
         
         // Atualiza configuração MQTT
@@ -1733,6 +1861,44 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
                 } else {
                     config.devices[i].registers[j].kalmanR = 0.1f;
                 }
+                
+                // Carrega writeFunction (padrão: 0x06 - Write Single Register)
+                if (regObj.containsKey("writeFunction")) {
+                    config.devices[i].registers[j].writeFunction = regObj["writeFunction"] | 0x06;
+                } else {
+                    config.devices[i].registers[j].writeFunction = 0x06;
+                }
+                
+                // Carrega writeRegisterCount (padrão: 1)
+                if (regObj.containsKey("writeRegisterCount")) {
+                    config.devices[i].registers[j].writeRegisterCount = regObj["writeRegisterCount"] | 1;
+                } else {
+                    config.devices[i].registers[j].writeRegisterCount = 1;
+                }
+                
+                // Carrega registerType (padrão: 2 - Leitura e Escrita)
+                if (regObj.containsKey("registerType")) {
+                    config.devices[i].registers[j].registerType = regObj["registerType"] | 2;
+                } else {
+                    // Migração: converte campos antigos para novo formato
+                    if (!config.devices[i].registers[j].isInput) {
+                        config.devices[i].registers[j].registerType = 0; // Input Register = somente leitura
+                    } else if (config.devices[i].registers[j].readOnly) {
+                        config.devices[i].registers[j].registerType = 0; // somente leitura
+                    } else if (config.devices[i].registers[j].isOutput && !config.devices[i].registers[j].readOnly) {
+                        config.devices[i].registers[j].registerType = 1; // somente escrita
+                    } else {
+                        config.devices[i].registers[j].registerType = 2; // leitura e escrita
+                    }
+                }
+                
+                // Carrega registerCount (padrão: 1)
+                if (regObj.containsKey("registerCount")) {
+                    config.devices[i].registers[j].registerCount = regObj["registerCount"] | 1;
+                } else {
+                    // Usa writeRegisterCount se registerCount não existir (migração)
+                    config.devices[i].registers[j].registerCount = config.devices[i].registers[j].writeRegisterCount;
+                }
             }
         }
         
@@ -1797,6 +1963,9 @@ void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t
             request->send(400, "application/json", "{\"error\":\"Expressão não fornecida\"}");
             return;
         }
+
+        // Desabilita efeitos colaterais durante o teste (ex: escrita Modbus)
+        setExpressionSideEffectsEnabled(false);
         
         // Prepara estrutura DeviceValues com todos os valores dos dispositivos
         // Aplica gain e offset antes de atribuir
@@ -2038,15 +2207,23 @@ void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t l
         return;
     }
     
-    // Verifica se a variável não é somente leitura
-    if (config.devices[deviceIndex].registers[registerIndex].readOnly) {
-        request->send(400, "application/json", "{\"error\":\"Variável é somente leitura\"}");
-        return;
+    // Verifica se o registro pode ser escrito baseado no registerType
+    uint8_t registerType = config.devices[deviceIndex].registers[registerIndex].registerType;
+    bool canWrite = (registerType == 1 || registerType == 2); // Escrita ou Leitura e Escrita
+    
+    // Compatibilidade: verifica campos antigos se registerType não estiver definido
+    if (registerType == 0) {
+        if (config.devices[deviceIndex].registers[registerIndex].readOnly) {
+            canWrite = false;
+        } else if (config.devices[deviceIndex].registers[registerIndex].isInput) {
+            canWrite = true;
+        } else {
+            canWrite = false;
+        }
     }
     
-    // Verifica se é um Holding Register (pode ser escrito)
-    if (!config.devices[deviceIndex].registers[registerIndex].isInput) {
-        request->send(400, "application/json", "{\"error\":\"Apenas Holding Registers podem ser escritos\"}");
+    if (!canWrite) {
+        request->send(400, "application/json", "{\"error\":\"Registro configurado apenas para leitura\"}");
         return;
     }
     
@@ -2060,23 +2237,54 @@ void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t l
     }
     
     float rawValue = (value - offset) / gain;
-    uint16_t rawValueInt = (uint16_t)round(rawValue);
+    uint32_t rawValueInt = (uint32_t)round(rawValue);  // Mudado para uint32_t para suportar valores maiores
     
     // Escreve no Modbus
     uint8_t slaveAddr = config.devices[deviceIndex].slaveAddress;
     uint16_t regAddr = config.devices[deviceIndex].registers[registerIndex].address;
+    uint8_t registerCount = config.devices[deviceIndex].registers[registerIndex].registerCount;
+    if (registerCount == 0) registerCount = 1; // Garante mínimo de 1
+    
+    // CRÍTICO: Yield antes de operação Modbus para manter webserver responsivo
+    yield();
     
     node.begin(slaveAddr, Serial2);
-    uint8_t result = node.writeSingleRegister(regAddr, rawValueInt);
+    uint8_t result = node.ku8MBSuccess;
+    
+    // Determina função Modbus automaticamente baseado na quantidade de registros
+    // Padrão Modbus: 0x06 para 1 registrador, 0x10 para múltiplos
+    if (registerCount == 1) {
+        // Write Single Register (0x06)
+        result = node.writeSingleRegister(regAddr, (uint16_t)(rawValueInt & 0xFFFF));
+    } else {
+        // Write Multiple Registers (0x10)
+        // Divide o valor inteiro em múltiplos registros (16 bits cada)
+        // O valor mais significativo vai no primeiro registrador
+        for (int i = registerCount - 1; i >= 0; i--) {
+            uint16_t regValue = (rawValueInt >> (i * 16)) & 0xFFFF;
+            node.setTransmitBuffer((registerCount - 1) - i, regValue);
+        }
+        result = node.writeMultipleRegisters(regAddr, registerCount);
+    }
+    
+    // CRÍTICO: Yield após operação Modbus para manter webserver responsivo
+    yield();
     
     if (result == node.ku8MBSuccess) {
-        // Atualiza valor na configuração
-        config.devices[deviceIndex].registers[registerIndex].value = rawValueInt;
+        // Atualiza valor na configuração (armazena apenas os 16 bits menos significativos)
+        config.devices[deviceIndex].registers[registerIndex].value = (uint16_t)(rawValueInt & 0xFFFF);
         
         String logMsg = "[Modbus] Escrito Dev " + String(slaveAddr) + 
-                       " Reg " + String(regAddr) + 
-                       ": " + String(value, 2) + 
-                       " (raw: " + String(rawValueInt) + ")\r\n";
+                       " Reg " + String(regAddr);
+        
+        if (registerCount > 1) {
+            logMsg += " (funcao 0x10, " + String(registerCount) + " registros)";
+        } else {
+            logMsg += " (funcao 0x06)";
+        }
+        
+        logMsg += ": " + String(value, 2) + 
+                  " (raw: " + String(rawValueInt) + ")\r\n";
         consolePrint(logMsg);
         
         request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Valor escrito com sucesso\"}");

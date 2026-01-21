@@ -11,6 +11,7 @@ Sistema completo de mestre Modbus RTU desenvolvido para o ESP32-S3-RS485-CAN da 
 - **Cálculos Customizados**: Rotina executada a cada 1 segundo para processar valores lidos
 - **Registros de Saída**: Sistema para escrever resultados de cálculos em dispositivos Modbus
 - **Filtro de Kalman**: Suavização de valores com parâmetros configuráveis por registro
+- **Scan Modbus**: Busca de dispositivos na rede RS485 via interface
 
 ## Hardware
 
@@ -107,6 +108,7 @@ O servidor web expõe as seguintes rotas:
 - `GET /api/config`: Retorna configuração atual (JSON)
 - `POST /api/config`: Salva nova configuração (JSON)
 - `GET /api/read`: Força leitura manual de todos os registros
+- `POST /api/modbus/scan`: Busca dispositivos Modbus (endereços 1-255) com parâmetros seriais informados
 
 ## Documentação Adicional
 

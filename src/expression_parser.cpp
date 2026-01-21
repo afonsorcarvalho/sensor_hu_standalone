@@ -4,9 +4,203 @@
  */
 
 #include "expression_parser.h"
+#include "modbus_handler.h"
+#include "config.h"
+#include "console.h"
 #include <math.h>
 #include <ctype.h>
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+// Controle de efeitos colaterais (ex: escrita Modbus) durante avaliação
+static bool g_expressionSideEffectsEnabled = false;
+
+void setExpressionSideEffectsEnabled(bool enabled) {
+    g_expressionSideEffectsEnabled = enabled;
+}
+
+// Registros do display conforme manual (seções 4.1.2 a 4.1.4)
+static const uint16_t kDisplayDecimalPointRegister = 0x0010;
+static const uint16_t kDisplaySignRegister = 0x0011;
+static const uint16_t kDisplayUpperRegister = 0x0012;
+static const uint16_t kDisplayLowerRegister = 0x0013;
+
+// Escreve o valor no display 7 segmentos via Modbus
+// Esta função pode ser chamada múltiplas vezes para diferentes endereços Modbus
+static bool writeDisplayRegisters(double value, uint8_t slaveAddr, uint8_t digits, uint16_t decimalPoint, char* errorMsg, size_t errorMsgSize) {
+    // Log de debug para verificar se a função está sendo chamada
+    char logMsg[128];
+    snprintf(logMsg, sizeof(logMsg), "[Display] Escrevendo valor %.2f no endereco %u, digitos: %u, ponto: %u\r\n", value, slaveAddr, digits, decimalPoint);
+    consolePrint(logMsg);
+    
+    if (slaveAddr < 1 || slaveAddr > 247) {
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Endereco Modbus invalido (1-247): %u", slaveAddr);
+        }
+        return false;
+    }
+    
+    if (digits == 0 || digits > 8) {
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Quantidade de digitos invalida (1-8): %u", digits);
+        }
+        return false;
+    }
+    
+    // Valor inteiro conforme manual
+    // Limita o valor ao máximo suportado pelo número de dígitos
+    double maxValue = pow(10.0, digits) - 1.0;
+    if (fabs(value) > maxValue) {
+        // Avisa mas não falha - apenas limita o valor
+        // Isso permite usar valores maiores que o display pode mostrar
+        value = (value < 0.0) ? -maxValue : maxValue;
+    }
+    
+    uint32_t absValue = (uint32_t)llround(fabs(value));
+    uint16_t lower = (uint16_t)(absValue & 0xFFFF);
+    uint16_t upper = (uint16_t)((absValue >> 16) & 0xFFFF);
+    uint16_t signValue = (value < 0.0) ? 1 : 0;
+    
+    // Valida posição do ponto decimal (já validado antes, mas valida novamente por segurança)
+    if (decimalPoint > 7) {
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Posicao do ponto decimal invalida (0-7): %u", decimalPoint);
+        }
+        return false;
+    }
+    
+    // CRÍTICO: Garante que o Modbus está configurado antes de usar
+    // Se não estiver configurado, inicializa com os parâmetros da configuração
+    if (currentBaudRate == 0) {
+        setupModbus(config.baudRate, buildSerialConfig(config.dataBits, config.parity, config.stopBits));
+    }
+    
+    // CRÍTICO: Configura timeout antes de usar Modbus (usa timeout configurado pelo usuário)
+    // Isso garante que dispositivos lentos ou rápidos funcionem corretamente
+    uint16_t timeout = config.timeout;
+    if (timeout < 10) timeout = 10;  // Mínimo 10ms
+    if (timeout > 1000) timeout = 1000;  // Máximo 1000ms
+    Serial2.setTimeout(timeout);
+    
+    // CRÍTICO: Configura endereço do dispositivo Modbus e garante que callbacks estão configurados
+    // Os callbacks preTransmission/postTransmission são essenciais para controle RS485
+    // IMPORTANTE: Sempre reconfigura os callbacks, pois podem ter sido perdidos
+    node.begin(slaveAddr, Serial2);
+    node.preTransmission(preTransmission);
+    node.postTransmission(postTransmission);
+    
+    // Escreve registradores do display (0x0012/0x0013) conforme quantidade de digitos
+    uint8_t result;
+    
+    // Se tem mais de 4 dígitos, escreve o registro superior primeiro
+    if (digits > 4) {
+        result = node.writeSingleRegister(kDisplayUpperRegister, upper);
+        if (result != node.ku8MBSuccess) {
+            const char* errorDesc = "Erro desconhecido";
+            switch (result) {
+                case 0xE1: errorDesc = "Timeout na resposta"; break;
+                case 0xE2: errorDesc = "Resposta invalida ou dispositivo nao respondeu"; break;
+                case 0xE3: errorDesc = "CRC invalido"; break;
+                case 0xE4: errorDesc = "Funcao Modbus ilegal"; break;
+                case 0xE5: errorDesc = "Endereco de registro invalido"; break;
+                case 0xE6: errorDesc = "Valor invalido"; break;
+                default: errorDesc = "Erro Modbus"; break;
+            }
+            char debugMsg[256];
+            snprintf(debugMsg, sizeof(debugMsg), "[Display] Erro ao escrever registro superior (0x%04X) no endereco %u: 0x%02X (%s)\r\n", kDisplayUpperRegister, slaveAddr, result, errorDesc);
+            consolePrint(debugMsg);
+            if (errorMsg && errorMsgSize > 0) {
+                snprintf(errorMsg, errorMsgSize, "Erro Modbus ao escrever registro superior (0x%04X) no endereco %u: 0x%02X (%s)", kDisplayUpperRegister, slaveAddr, result, errorDesc);
+            }
+            return false;
+        }
+        yield();
+        vTaskDelay(pdMS_TO_TICKS(20)); // Pequeno delay para estabilidade RS485
+        yield();
+    }
+    
+    // Sempre escreve o registro inferior (contém os 4 dígitos menos significativos)
+    result = node.writeSingleRegister(kDisplayLowerRegister, lower);
+    if (result != node.ku8MBSuccess) {
+        const char* errorDesc = "Erro desconhecido";
+        switch (result) {
+            case 0xE1: errorDesc = "Timeout na resposta"; break;
+            case 0xE2: errorDesc = "Resposta invalida ou dispositivo nao respondeu"; break;
+            case 0xE3: errorDesc = "CRC invalido"; break;
+            case 0xE4: errorDesc = "Funcao Modbus ilegal"; break;
+            case 0xE5: errorDesc = "Endereco de registro invalido"; break;
+            case 0xE6: errorDesc = "Valor invalido"; break;
+            default: errorDesc = "Erro Modbus"; break;
+        }
+        char debugMsg[256];
+        snprintf(debugMsg, sizeof(debugMsg), "[Display] Erro ao escrever registro inferior (0x%04X) no endereco %u: 0x%02X (%s)\r\n", kDisplayLowerRegister, slaveAddr, result, errorDesc);
+        consolePrint(debugMsg);
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Erro Modbus ao escrever registro inferior (0x%04X) no endereco %u: 0x%02X (%s)", kDisplayLowerRegister, slaveAddr, result, errorDesc);
+        }
+        return false;
+    }
+    yield();
+    vTaskDelay(pdMS_TO_TICKS(20)); // Pequeno delay para estabilidade RS485
+    yield();
+    
+    // Configura sinal e ponto decimal conforme manual
+    result = node.writeSingleRegister(kDisplaySignRegister, signValue);
+    if (result != node.ku8MBSuccess) {
+        const char* errorDesc = "Erro desconhecido";
+        switch (result) {
+            case 0xE1: errorDesc = "Timeout na resposta"; break;
+            case 0xE2: errorDesc = "Resposta invalida ou dispositivo nao respondeu"; break;
+            case 0xE3: errorDesc = "CRC invalido"; break;
+            case 0xE4: errorDesc = "Funcao Modbus ilegal"; break;
+            case 0xE5: errorDesc = "Endereco de registro invalido"; break;
+            case 0xE6: errorDesc = "Valor invalido"; break;
+            default: errorDesc = "Erro Modbus"; break;
+        }
+        char debugMsg[256];
+        snprintf(debugMsg, sizeof(debugMsg), "[Display] Erro ao escrever registro de sinal (0x%04X) no endereco %u: 0x%02X (%s)\r\n", kDisplaySignRegister, slaveAddr, result, errorDesc);
+        consolePrint(debugMsg);
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Erro Modbus ao escrever registro de sinal (0x%04X) no endereco %u: 0x%02X (%s)", kDisplaySignRegister, slaveAddr, result, errorDesc);
+        }
+        return false;
+    }
+    yield();
+    vTaskDelay(pdMS_TO_TICKS(20)); // Pequeno delay para estabilidade RS485
+    yield();
+    
+    result = node.writeSingleRegister(kDisplayDecimalPointRegister, decimalPoint);
+    if (result != node.ku8MBSuccess) {
+        const char* errorDesc = "Erro desconhecido";
+        switch (result) {
+            case 0xE1: errorDesc = "Timeout na resposta"; break;
+            case 0xE2: errorDesc = "Resposta invalida ou dispositivo nao respondeu"; break;
+            case 0xE3: errorDesc = "CRC invalido"; break;
+            case 0xE4: errorDesc = "Funcao Modbus ilegal"; break;
+            case 0xE5: errorDesc = "Endereco de registro invalido"; break;
+            case 0xE6: errorDesc = "Valor invalido"; break;
+            default: errorDesc = "Erro Modbus"; break;
+        }
+        char debugMsg[256];
+        snprintf(debugMsg, sizeof(debugMsg), "[Display] Erro ao escrever registro de ponto decimal (0x%04X) no endereco %u: 0x%02X (%s)\r\n", kDisplayDecimalPointRegister, slaveAddr, result, errorDesc);
+        consolePrint(debugMsg);
+        if (errorMsg && errorMsgSize > 0) {
+            snprintf(errorMsg, errorMsgSize, "Erro Modbus ao escrever registro de ponto decimal (0x%04X) no endereco %u: 0x%02X (%s)", kDisplayDecimalPointRegister, slaveAddr, result, errorDesc);
+        }
+        return false;
+    }
+    yield();
+    vTaskDelay(pdMS_TO_TICKS(20)); // Pequeno delay para estabilidade RS485
+    yield();
+    
+    // Log de sucesso
+    char successMsg[128];
+    snprintf(successMsg, sizeof(successMsg), "[Display] Sucesso: Valor %.2f escrito no endereco %u\r\n", value, slaveAddr);
+    consolePrint(successMsg);
+    
+    return true;
+}
 
 // Função auxiliar para pular espaços
 static void skipSpaces(const char** expr) {
@@ -189,6 +383,118 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                         
                         // Retorna valor baseado na condição (qualquer valor != 0 é verdadeiro)
                         result = (fabs(condition) > 0.000001) ? trueValue : falseValue;
+                        termSuccess = true;
+                    } else if (identifier == "display" || identifier == "disp") {
+                        // display(valor, endereco_modbus, digitos[, ponto_decimal])
+                        // endereco_modbus = endereco do dispositivo (slave)
+                        // ponto_decimal = posicao do ponto (0-7). Default: 0
+                        // Escreve no display 7 segmentos conforme manual do dispositivo
+                        skipSpaces(expr);
+                        
+                        double valueArg = evalExpression(expr, variables, varCount, success, errorMsg, errorMsgSize);
+                        if (!*success) return 0.0;
+                        skipSpaces(expr);
+                        
+                        if (**expr != ',') {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Funcao display requer 3 argumentos separados por virgula");
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        (*expr)++;
+                        skipSpaces(expr);
+                        
+                        double slaveArg = evalExpression(expr, variables, varCount, success, errorMsg, errorMsgSize);
+                        if (!*success) return 0.0;
+                        skipSpaces(expr);
+                        
+                        if (**expr != ',') {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Funcao display requer 3 argumentos separados por virgula");
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        (*expr)++;
+                        skipSpaces(expr);
+                        
+                        double digitsArg = evalExpression(expr, variables, varCount, success, errorMsg, errorMsgSize);
+                        if (!*success) return 0.0;
+                        skipSpaces(expr);
+                        
+                        // Verifica se existe o 4o argumento (ponto decimal)
+                        double decimalArg = 0.0;
+                        if (**expr == ',') {
+                            (*expr)++;
+                            skipSpaces(expr);
+                            
+                            decimalArg = evalExpression(expr, variables, varCount, success, errorMsg, errorMsgSize);
+                            if (!*success) return 0.0;
+                            skipSpaces(expr);
+                        }
+                        
+                        if (**expr != ')') {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Parentese nao fechado na funcao display");
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        (*expr)++;
+                        
+                        // Converte argumentos para inteiros com validação
+                        uint8_t slaveAddr = (uint8_t)llround(slaveArg);
+                        uint8_t digits = (uint8_t)llround(digitsArg);
+                        uint16_t decimalPoint = (uint16_t)llround(decimalArg);
+                        
+                        // Valida endereço Modbus
+                        if (slaveAddr < 1 || slaveAddr > 247) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Endereco Modbus invalido (1-247): %u", slaveAddr);
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        
+                        // Valida quantidade de dígitos
+                        if (digits < 1 || digits > 8) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Quantidade de digitos invalida (1-8): %u", digits);
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        
+                        // Valida posição do ponto decimal
+                        if (decimalPoint > 7) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Posicao do ponto decimal invalida (0-7): %u", decimalPoint);
+                            }
+                            *success = false;
+                            return 0.0;
+                        }
+                        
+                                            // CRÍTICO: Verifica se efeitos colaterais estão habilitados
+                        // Se não estiverem, a função display não escreve no Modbus (apenas retorna o valor)
+                        if (g_expressionSideEffectsEnabled) {
+                            bool ok = writeDisplayRegisters(valueArg, slaveAddr, digits, decimalPoint, errorMsg, errorMsgSize);
+                            if (!ok) {
+                                // Log do erro para debug
+                                if (errorMsg && errorMsgSize > 0 && strlen(errorMsg) > 0) {
+                                    char logMsg[256];
+                                    snprintf(logMsg, sizeof(logMsg), "[Display] Erro: %s\r\n", errorMsg);
+                                    consolePrint(logMsg);
+                                }
+                                *success = false;
+                                return 0.0;
+                            }
+                        }
+                        // Se efeitos colaterais não estão habilitados, apenas retorna o valor sem escrever
+                        // Isso permite usar display() em testes sem escrever no Modbus
+                        
+                        // Retorna o valor original para permitir uso em expressões
+                        result = valueArg;
                         termSuccess = true;
                     } else if (identifier == "pow") {
                         // pow(base, expoente) - requer dois argumentos

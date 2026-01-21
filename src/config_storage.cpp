@@ -20,6 +20,12 @@ void loadConfig() {
     if (configJson == "{}") {
         // Configuração padrão vazia
         config.baudRate = MODBUS_SERIAL_BAUD;  // Usa valor padrão
+        // Configurações seriais padrão do Modbus RTU
+        config.dataBits = MODBUS_DATA_BITS_DEFAULT;
+        config.stopBits = MODBUS_STOP_BITS_DEFAULT;
+        config.parity = MODBUS_PARITY_NONE;
+        config.startBits = MODBUS_START_BITS_DEFAULT;
+        config.timeout = 50;  // Timeout padrão: 50ms
         config.deviceCount = 0;
         
         // Configurações padrão MQTT
@@ -70,6 +76,7 @@ void loadConfig() {
                 config.devices[i].registers[j].kalmanEnabled = false; // Padrão: filtro desabilitado
                 config.devices[i].registers[j].kalmanQ = 0.01f; // Process noise padrão
                 config.devices[i].registers[j].kalmanR = 0.1f;  // Measurement noise padrão
+                config.devices[i].registers[j].generateGraph = false; // Padrão: não gerar gráfico
             }
         }
         
@@ -99,6 +106,12 @@ void loadConfig() {
     
     // Carrega configurações do sistema
     config.baudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
+    // Configurações seriais (com fallback para valores padrão)
+    config.dataBits = doc["dataBits"] | MODBUS_DATA_BITS_DEFAULT;
+    config.stopBits = doc["stopBits"] | MODBUS_STOP_BITS_DEFAULT;
+    config.parity = doc["parity"] | MODBUS_PARITY_NONE;
+    config.startBits = doc["startBits"] | MODBUS_START_BITS_DEFAULT;
+    config.timeout = doc["timeout"] | 50;  // Timeout padrão: 50ms
     config.deviceCount = doc["deviceCount"] | 0;
     
     // Carrega configuração MQTT
@@ -307,6 +320,28 @@ void loadConfig() {
             config.devices[i].registers[j].kalmanQ = regObj["kalmanQ"] | 0.01f;
             config.devices[i].registers[j].kalmanR = regObj["kalmanR"] | 0.1f;
             
+            // Carrega generateGraph (padrão: false)
+            config.devices[i].registers[j].generateGraph = regObj["generateGraph"] | false;
+            
+            // Carrega registerType (padrão: 2 - Leitura e Escrita)
+            if (regObj.containsKey("registerType")) {
+                config.devices[i].registers[j].registerType = regObj["registerType"] | 2;
+            } else {
+                // Compatibilidade: se registerType não existe, calcula baseado nos campos antigos
+                if (regObj["isInput"] | true) {
+                    if (regObj["readOnly"] | false) {
+                        config.devices[i].registers[j].registerType = 0; // somente leitura
+                    } else {
+                        config.devices[i].registers[j].registerType = 2; // leitura e escrita
+                    }
+                } else {
+                    config.devices[i].registers[j].registerType = 0; // Input Register = somente leitura
+                }
+            }
+            
+            // Carrega registerCount (padrão: 1)
+            config.devices[i].registers[j].registerCount = regObj["registerCount"] | 1;
+            
             Serial.print("  Registro ");
             Serial.print(j);
             Serial.print(": endereco=");
@@ -332,6 +367,12 @@ bool saveConfig() {
     // Para 10 dispositivos com 20 registros cada: ~22KB
     DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
     doc["baudRate"] = config.baudRate;
+    // Configurações seriais do Modbus
+    doc["dataBits"] = config.dataBits;
+    doc["stopBits"] = config.stopBits;
+    doc["parity"] = config.parity;
+    doc["startBits"] = config.startBits;
+    doc["timeout"] = config.timeout;
     doc["deviceCount"] = config.deviceCount;
     
     // Adiciona configuração MQTT
@@ -397,6 +438,9 @@ bool saveConfig() {
             regObj["kalmanEnabled"] = config.devices[i].registers[j].kalmanEnabled;
             regObj["kalmanQ"] = config.devices[i].registers[j].kalmanQ;
             regObj["kalmanR"] = config.devices[i].registers[j].kalmanR;
+            regObj["generateGraph"] = config.devices[i].registers[j].generateGraph;
+            regObj["registerType"] = config.devices[i].registers[j].registerType;
+            regObj["registerCount"] = config.devices[i].registers[j].registerCount;
             // Não salva value aqui, pois será lido do Modbus ou inicializado com 0
         }
         
@@ -463,6 +507,12 @@ bool resetConfig() {
     
     // Reseta a estrutura config para valores padrão
     config.baudRate = MODBUS_SERIAL_BAUD;
+    // Configurações seriais padrão do Modbus RTU
+    config.dataBits = MODBUS_DATA_BITS_DEFAULT;
+    config.stopBits = MODBUS_STOP_BITS_DEFAULT;
+    config.parity = MODBUS_PARITY_NONE;
+    config.startBits = MODBUS_START_BITS_DEFAULT;
+    config.timeout = 50;  // Timeout padrão: 50ms
     config.deviceCount = 0;
     
     // Configurações padrão MQTT
@@ -520,6 +570,11 @@ bool resetConfig() {
             config.devices[i].registers[j].kalmanEnabled = false;
             config.devices[i].registers[j].kalmanQ = 0.01f;
             config.devices[i].registers[j].kalmanR = 0.1f;
+            config.devices[i].registers[j].generateGraph = false;
+            config.devices[i].registers[j].writeFunction = 0x06;
+            config.devices[i].registers[j].writeRegisterCount = 1;
+            config.devices[i].registers[j].registerType = 2; // padrão: Leitura e Escrita
+            config.devices[i].registers[j].registerCount = 1; // padrão: 1 registrador
         }
     }
     

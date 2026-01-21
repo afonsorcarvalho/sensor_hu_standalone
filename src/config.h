@@ -14,6 +14,14 @@
 #define WEB_SERVER_PORT 80
 #define MODBUS_SERIAL_BAUD 9600
 #define MODBUS_SERIAL_CONFIG SERIAL_8N1
+// Paridade Modbus (configurável via interface web)
+#define MODBUS_PARITY_NONE 0
+#define MODBUS_PARITY_EVEN 1
+#define MODBUS_PARITY_ODD 2
+// Bits padrão do Modbus RTU (mantém compatibilidade com hardware)
+#define MODBUS_DATA_BITS_DEFAULT 8
+#define MODBUS_STOP_BITS_DEFAULT 1
+#define MODBUS_START_BITS_DEFAULT 1
 #define MAX_DEVICES 10
 #define MAX_REGISTERS_PER_DEVICE 20
 #define CALCULATION_INTERVAL_MS 1000
@@ -36,15 +44,20 @@
 struct ModbusRegister {
     uint16_t address;        // Endereço do registro
     uint16_t value;          // Valor atual lido (raw do Modbus)
-    bool isInput;            // true = Holding Register (0x03), false = Input Register (0x04)
-    bool isOutput;           // true = registro de saída (para escrever resultados)
-    bool readOnly;           // true = somente leitura, false = leitura e escrita
+    bool isInput;            // true = Holding Register (0x03), false = Input Register (0x04) - DEPRECATED: usar registerType
+    bool isOutput;           // true = registro de saída (para escrever resultados) - DEPRECATED: usar registerType
+    bool readOnly;           // true = somente leitura, false = leitura e escrita - DEPRECATED: usar registerType
     char variableName[32];   // Nome da variável para uso em cálculos
     float gain;              // Ganho aplicado ao valor antes de atribuir à variável (padrão: 1.0)
     float offset;            // Offset aplicado ao valor antes de atribuir à variável (padrão: 0.0)
     bool kalmanEnabled;      // true = filtro de Kalman habilitado para este registro
     float kalmanQ;           // Process noise (ruído do processo) - padrão: 0.01
     float kalmanR;           // Measurement noise (ruído da medição) - padrão: 0.1
+    bool generateGraph;      // true = incluir esta variável no gráfico em tempo real
+    uint8_t writeFunction;   // Função Modbus para escrita: 0x06 (Write Single Register) ou 0x10 (Write Multiple Registers) - DEPRECATED: calculado automaticamente
+    uint8_t writeRegisterCount; // Quantidade de registros para escrita - DEPRECATED: usar registerCount
+    uint8_t registerType;    // 0 = Leitura, 1 = Escrita, 2 = Leitura e Escrita
+    uint8_t registerCount;   // Quantidade de registradores para leitura/escrita (padrão: 1)
 };
 
 /**
@@ -119,6 +132,11 @@ struct WireGuardConfig {
  */
 struct SystemConfig {
     uint32_t baudRate;       // Velocidade de comunicação RS485 (baud rate)
+    uint8_t dataBits;        // Bits de dados (padrão: 8)
+    uint8_t stopBits;        // Bits de parada (padrão: 1)
+    uint8_t parity;          // Paridade (0=None, 1=Even, 2=Odd)
+    uint8_t startBits;       // Bits de start (padrão: 1, fixo em UART)
+    uint16_t timeout;        // Timeout de resposta Modbus em ms (padrão: 50)
     uint8_t deviceCount;     // Quantidade de dispositivos configurados
     ModbusDevice devices[MAX_DEVICES];
     MQTTConfig mqtt;         // Configuração MQTT

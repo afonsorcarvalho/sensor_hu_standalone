@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Configuracao Sistema Modbus</title>
+    <!-- Chart.js para gráficos em tempo real -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 20px; }
@@ -238,6 +240,38 @@
                         <option value="115200">115200</option>
                     </select>
                 </label>
+                <!-- Configuração serial do Modbus -->
+                <label>Bits de Dados:
+                    <select id="dataBits">
+                        <option value="8" selected>8</option>
+                        <option value="7">7</option>
+                    </select>
+                </label>
+                <label>Paridade:
+                    <select id="parity">
+                        <option value="0" selected>Nenhuma</option>
+                        <option value="1">Par</option>
+                        <option value="2">Impar</option>
+                    </select>
+                </label>
+                <label>Stop Bits:
+                    <select id="stopBits">
+                        <option value="1" selected>1</option>
+                        <option value="2">2</option>
+                    </select>
+                </label>
+                <label>Start Bit:
+                    <select id="startBits">
+                        <option value="1" selected>1</option>
+                    </select>
+                </label>
+                <label>Timeout de Resposta (ms):
+                    <input type="number" id="modbusTimeout" min="10" max="1000" step="10" value="50" style="width: 120px; padding: 6px; border: 1px solid #ddd; border-radius: 4px;">
+                    <span style="font-size: 11px; color: #666; margin-left: 5px;">(10-1000ms, padrão: 50ms)</span>
+                </label>
+                <p style="font-size: 11px; color: #666; margin: 5px 0 10px 0;">
+                    <strong>Dica:</strong> Dispositivos lentos podem precisar de 100-200ms. Dispositivos rápidos funcionam com 50ms ou menos.
+                </p>
             </div>
             <div id="devices"></div>
             <button class="btn btn-primary" onclick="addDevice()">Adicionar Dispositivo</button>
@@ -255,7 +289,8 @@
                     <strong>Condicional:</strong> <code>if(condição, valor_verdadeiro, valor_falso)</code> - Exemplo: <code>if({d[0][0]} > 25, 1, 0)</code><br>
                     <strong>Atribuição:</strong> Use <code>{d[i][j]}=expressao</code> para escrever resultado em um registro. Exemplo: <code>{d[0][2]}=if({d[0][0]} > 25, 1, 0)</code><br>
                     <strong>Potência:</strong> Use <code>^</code> ou <code>pow(base, expoente)</code>. Exemplo: <code>10^2</code> ou <code>pow(10, 2)</code> = 100<br>
-                    <strong>Comentários:</strong> Linhas que começam com <code>#</code> são ignoradas.
+                    <strong>Comentários:</strong> Linhas que começam com <code>#</code> são ignoradas.<br>
+                    <strong>Display 7 segmentos:</strong> Use <code>display(valor, endereco_modbus, digitos, ponto_decimal)</code> para escrever no display conforme o manual (ponto_decimal = 0-7, opcional; usa registros 0x0010 a 0x0013).
                 </p>
                 <div id="calculationContainer" style="background: white; border: 1px solid #ddd; border-radius: 4px; padding: 10px;">
                     <textarea id="calculationCode" style="width: 100%; min-height: 150px; padding: 10px; font-family: monospace; border: none; outline: none; resize: vertical; background: transparent;" placeholder="Exemplo com múltiplas linhas:&#10;{d[0][2]}={d[0][0]} * 1.8 + 32&#10;{d[0][3]}={d[0][1]} / 100&#10;# Esta linha é um comentário"></textarea>
@@ -268,6 +303,26 @@
                 <div id="variablesList" style="margin-top: 15px; padding: 10px; background: white; border-radius: 4px; max-height: 200px; overflow-y: auto; display: none;">
                     <h4 style="margin: 0 0 10px 0;">Variaveis Disponiveis:</h4>
                     <div id="variablesContent"></div>
+                </div>
+                
+                <!-- Seção de Gráfico em Tempo Real -->
+                <div id="realtimeGraphSection" style="margin-top: 20px; padding: 15px; background: white; border-radius: 4px; border: 2px solid #28a745; display: none;">
+                    <h4 style="margin: 0 0 15px 0; color: #28a745;">📈 Gráfico em Tempo Real</h4>
+                    <div style="margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center;">
+                        <label style="display: flex; align-items: center; gap: 10px;">
+                            <input type="checkbox" id="graphEnabled" onchange="toggleRealtimeGraph()" style="width: auto;">
+                            <span>Habilitar atualização automática</span>
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 13px; color: #495057;">Intervalo de amostragem:</span>
+                            <input type="number" id="graphSamplingInterval" min="0.1" max="60" step="0.1" value="0.5" style="width: 80px; padding: 5px; border: 1px solid #ced4da; border-radius: 4px; font-size: 13px;" onchange="updateGraphSamplingInterval()">
+                            <span style="font-size: 13px; color: #666;">segundos</span>
+                        </label>
+                        <span id="graphStatus" style="margin-left: auto; font-size: 12px; color: #666;"></span>
+                    </div>
+                    <div style="position: relative; height: 400px; width: 100%;">
+                        <canvas id="realtimeChart" style="max-height: 400px;"></canvas>
+                    </div>
                 </div>
             </div>
         </div>
@@ -459,6 +514,17 @@
         let baudRate = 9600;
         let currentSection = 'modbus';
 
+        // Obtém parâmetros seriais do Modbus selecionados na interface
+        function getModbusSerialSettings() {
+            return {
+                dataBits: parseInt(document.getElementById('dataBits').value) || 8,
+                stopBits: parseInt(document.getElementById('stopBits').value) || 1,
+                parity: parseInt(document.getElementById('parity').value) || 0,
+                startBits: parseInt(document.getElementById('startBits').value) || 1,
+                timeout: parseInt(document.getElementById('modbusTimeout').value) || 50
+            };
+        }
+        
         function showSection(section) {
             // Esconde todas as seções
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
@@ -804,7 +870,11 @@
                 offset: 0.0,
                 kalmanEnabled: false,
                 kalmanQ: 0.01,
-                kalmanR: 0.1
+                kalmanR: 0.1,
+                writeFunction: 0x06,
+                writeRegisterCount: 1,
+                registerType: 2, // padrão: Leitura e Escrita
+                registerCount: 1  // padrão: 1 registrador
             });
             renderDevices();
         }
@@ -818,6 +888,35 @@
             }
         }
         
+        // Função para processar mudança no tipo de registro (Leitura/Escrita/Leitura e Escrita)
+        function handleRegisterTypeChange(deviceIndex, registerIndex, registerType) {
+            const reg = devices[deviceIndex].registers[registerIndex];
+            
+            // Atualiza o tipo de registro
+            reg.registerType = registerType;
+            
+            // Mantém compatibilidade com campos antigos (para migração gradual)
+            if (registerType === 0) {
+                // Leitura: Input Register (somente leitura)
+                reg.isInput = false;
+                reg.readOnly = true;
+                reg.isOutput = false;
+            } else if (registerType === 1) {
+                // Escrita: Holding Register (somente escrita)
+                reg.isInput = true;
+                reg.readOnly = false;
+                reg.isOutput = true;
+            } else if (registerType === 2) {
+                // Leitura e Escrita: Holding Register
+                reg.isInput = true;
+                reg.readOnly = false;
+                reg.isOutput = false;
+            }
+            
+            // Re-renderiza para atualizar campos condicionais (como "Valor Atual")
+            renderDevices();
+        }
+        
         function removeRegister(deviceIndex, regIndex) {
             devices[deviceIndex].registers.splice(regIndex, 1);
             renderDevices();
@@ -826,6 +925,11 @@
         function renderDevices() {
             const container = document.getElementById('devices');
             let html = '';
+            
+            // Atualiza gráfico após renderizar dispositivos (caso tenha mudanças)
+            setTimeout(() => {
+                updateGraphVariables();
+            }, 100);
             for (let dIdx = 0; dIdx < devices.length; dIdx++) {
                 const device = devices[dIdx];
                 const deviceName = device.deviceName || 'Dispositivo ' + (dIdx + 1);
@@ -872,16 +976,43 @@
                     
                     html += '<div class="register-fields">';
                     html += '<label><span>Endereço</span><input type="number" value="' + reg.address + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].address = parseInt(this.value)" min="0"></label>';
-                    html += '<label><span>Tipo de Registro</span><select onchange="devices[' + dIdx + '].registers[' + rIdx + '].isInput = this.value === \'input\'">';
-                    html += '<option value="input" ' + (reg.isInput ? 'selected' : '') + '>Holding Register (0x03)</option>';
-                    html += '<option value="output" ' + (!reg.isInput ? 'selected' : '') + '>Input Register (0x04)</option>';
+                    
+                    // Combobox simplificada: Leitura, Escrita, Leitura e Escrita
+                    // Determina tipo atual baseado nos campos antigos (compatibilidade)
+                    let registerType = reg.registerType !== undefined ? reg.registerType : 2; // padrão: leitura e escrita
+                    if (reg.registerType === undefined) {
+                        // Migração: converte campos antigos para novo formato
+                        if (!reg.isInput) {
+                            registerType = 0; // Input Register = somente leitura
+                        } else if (reg.readOnly) {
+                            registerType = 0; // somente leitura
+                        } else if (reg.isOutput && !reg.readOnly) {
+                            registerType = 1; // somente escrita
+                        } else {
+                            registerType = 2; // leitura e escrita
+                        }
+                    }
+                    
+                    html += '<label><span>Tipo de Registro</span>';
+                    html += '<select id="registerType_' + dIdx + '_' + rIdx + '" onchange="handleRegisterTypeChange(' + dIdx + ', ' + rIdx + ', parseInt(this.value));">';
+                    html += '<option value="0" ' + (registerType === 0 ? 'selected' : '') + '>Leitura</option>';
+                    html += '<option value="1" ' + (registerType === 1 ? 'selected' : '') + '>Escrita</option>';
+                    html += '<option value="2" ' + (registerType === 2 ? 'selected' : '') + '>Leitura e Escrita</option>';
                     html += '</select></label>';
+                    
+                    // Campo de quantidade de registradores (sempre visível)
+                    const registerCount = reg.registerCount !== undefined ? reg.registerCount : (reg.writeRegisterCount !== undefined ? reg.writeRegisterCount : 1);
+                    html += '<label><span>Quantidade de Registradores</span>';
+                    html += '<input type="number" min="1" max="125" value="' + registerCount + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].registerCount = parseInt(this.value) || 1" placeholder="1-125">';
+                    html += '<div style="font-size: 11px; color: #666; margin-top: 4px;">Número de registradores a ler/escrever (padrão Modbus: 1-125)</div>';
+                    html += '</label>';
+                    
                     html += '<label><span>Nome da Variável</span><input type="text" value="' + escapeHtml(reg.variableName || '') + '" placeholder="ex: temperatura" onchange="devices[' + dIdx + '].registers[' + rIdx + '].variableName = this.value"></label>';
                     html += '<label><span>Ganho</span><input type="number" step="0.00000001" value="' + (reg.gain !== undefined ? reg.gain : 1.0) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].gain = parseFloat(this.value) || 1.0"></label>';
                     html += '<label><span>Offset</span><input type="number" step="0.01" value="' + (reg.offset !== undefined ? reg.offset : 0.0) + '" onchange="devices[' + dIdx + '].registers[' + rIdx + '].offset = parseFloat(this.value) || 0.0"></label>';
                     
                     // Campo para modificar valor atual (apenas para registros que podem ser escritos)
-                    const canWriteReg = !reg.readOnly && reg.isInput;
+                    const canWriteReg = registerType === 1 || registerType === 2;
                     if (canWriteReg) {
                         // Calcula valor processado atual (se houver valor raw)
                         const rawValue = reg.value !== undefined ? reg.value : 0;
@@ -898,9 +1029,8 @@
                     }
                     
                     html += '<label><span>Opções</span><div style="display: flex; flex-direction: column; gap: 8px; padding-top: 8px;">';
-                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" ' + (reg.isOutput ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].isOutput = this.checked" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Registro de Saída</span></div>';
-                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" ' + (reg.readOnly ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].readOnly = this.checked; renderDevices();" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Somente Leitura</span></div>';
                     html += '<div style="display: flex; align-items: center;"><input type="checkbox" id="kalmanCheck_' + dIdx + '_' + rIdx + '" ' + (reg.kalmanEnabled ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].kalmanEnabled = this.checked; toggleKalmanConfig(' + dIdx + ', ' + rIdx + ');" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">Filtro de Kalman</span></div>';
+                    html += '<div style="display: flex; align-items: center;"><input type="checkbox" id="generateGraph_' + dIdx + '_' + rIdx + '" ' + (reg.generateGraph ? 'checked' : '') + ' onchange="devices[' + dIdx + '].registers[' + rIdx + '].generateGraph = this.checked; updateGraphVariables();" style="width: auto; margin-right: 8px;"><span style="font-weight: normal; font-size: 12px;">📈 Gerar Gráfico</span></div>';
                     html += '</div></label>';
                     
                     // Configurações do Filtro de Kalman (visíveis apenas quando habilitado)
@@ -940,6 +1070,11 @@
                 // Modbus
                 baudRate = data.baudRate || 9600;
                 document.getElementById('baudRate').value = baudRate;
+                document.getElementById('dataBits').value = data.dataBits || 8;
+                document.getElementById('stopBits').value = data.stopBits || 1;
+                document.getElementById('parity').value = data.parity || 0;
+                document.getElementById('startBits').value = data.startBits || 1;
+                document.getElementById('modbusTimeout').value = data.timeout || 50;
                 devices = data.devices || [];
                 
                 // Garante que todos os dispositivos e registros tenham campos necessários
@@ -954,12 +1089,33 @@
                             if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
                             if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
                             if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                            if (reg.generateGraph === undefined) reg.generateGraph = false;
+                            if (reg.writeFunction === undefined) reg.writeFunction = 0x06;
+                            if (reg.writeRegisterCount === undefined) reg.writeRegisterCount = 1;
+                            if (reg.registerType === undefined) {
+                                // Migração: converte campos antigos para novo formato
+                                if (!reg.isInput) {
+                                    reg.registerType = 0; // Input Register = somente leitura
+                                } else if (reg.readOnly) {
+                                    reg.registerType = 0; // somente leitura
+                                } else if (reg.isOutput && !reg.readOnly) {
+                                    reg.registerType = 1; // somente escrita
+                                } else {
+                                    reg.registerType = 2; // leitura e escrita
+                                }
+                            }
+                            if (reg.registerCount === undefined) {
+                                reg.registerCount = reg.writeRegisterCount !== undefined ? reg.writeRegisterCount : 1;
+                            }
                         });
                     }
                 });
                 
                 renderDevices();
                 
+                // Atualiza gráfico após carregar configuração
+                updateGraphVariables();
+
                 // Carrega código de cálculo
                 if (data.calculationCode) {
                     document.getElementById('calculationCode').value = data.calculationCode;
@@ -1042,6 +1198,8 @@
                         if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
                         if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
                         if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                        if (reg.writeFunction === undefined) reg.writeFunction = 0x06;
+                        if (reg.writeRegisterCount === undefined) reg.writeRegisterCount = 1;
                     });
                 }
                 if (!devices[deviceIndex].deviceName) devices[deviceIndex].deviceName = '';
@@ -1076,12 +1234,19 @@
                             if (reg.kalmanEnabled === undefined) reg.kalmanEnabled = false;
                             if (reg.kalmanQ === undefined) reg.kalmanQ = 0.01;
                             if (reg.kalmanR === undefined) reg.kalmanR = 0.1;
+                            if (reg.writeFunction === undefined) reg.writeFunction = 0x06;
+                            if (reg.writeRegisterCount === undefined) reg.writeRegisterCount = 1;
                         });
                     }
                 });
                 
+                const serialSettings = getModbusSerialSettings();
                 const config = {
                     baudRate: baudRate,
+                    dataBits: serialSettings.dataBits,
+                    stopBits: serialSettings.stopBits,
+                    parity: serialSettings.parity,
+                    startBits: serialSettings.startBits,
                     deviceCount: devices.length,
                     devices: devices,
                     mqtt: {
@@ -1140,11 +1305,17 @@
         async function saveAndReboot() {
             try {
                 // Primeiro salva a configuração
+                const serialSettings = getModbusSerialSettings();
                 const saveResponse = await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         baudRate: parseInt(document.getElementById('baudRate').value),
+                        dataBits: serialSettings.dataBits,
+                        stopBits: serialSettings.stopBits,
+                        parity: serialSettings.parity,
+                        startBits: serialSettings.startBits,
+                        timeout: serialSettings.timeout,
                         deviceCount: devices.length,
                         devices: devices,
                         mqtt: {
@@ -1520,7 +1691,8 @@
                             // Mostra valor com Kalman se habilitado, caso contrário mostra valor normal
                             const displayValue = reg.value !== undefined ? reg.value.toFixed(2) : 'N/A';
                             const kalmanInfo = reg.kalmanEnabled ? ' <span style="color: #4CAF50; font-size: 10px;" title="Valor com filtro de Kalman aplicado">[K]</span>' : '';
-                            html += '<td style="padding: 5px; text-align: center;"><strong>' + displayValue + kalmanInfo + '</strong></td>';
+                            const graphInfo = reg.generateGraph ? ' <span style="color: #28a745; font-size: 10px;" title="Variável no gráfico">[📈]</span>' : '';
+                            html += '<td style="padding: 5px; text-align: center;"><strong>' + displayValue + kalmanInfo + graphInfo + '</strong></td>';
                             html += '<td style="padding: 5px; text-align: center;">' + (reg.valueRaw !== undefined ? reg.valueRaw : 'N/A') + '</td>';
                             html += '<td style="padding: 5px; text-align: center;">' + (reg.gain !== undefined ? reg.gain.toFixed(2) : '1.00') + '</td>';
                             html += '<td style="padding: 5px; text-align: center;">' + (reg.offset !== undefined ? reg.offset.toFixed(2) : '0.00') + '</td>';
@@ -1549,6 +1721,294 @@
             } catch (error) {
                 contentDiv.innerHTML = '<p style="color: #f44336;">Erro ao carregar variaveis: ' + error + '</p>';
                 listDiv.style.display = 'block';
+            }
+            
+            // Atualiza gráfico se estiver habilitado
+            updateGraphVariables();
+        }
+        
+        // Variáveis para gráfico em tempo real
+        let realtimeChart = null;
+        let graphUpdateInterval = null;
+        const MAX_GRAPH_POINTS = 1000;
+        let graphData = {
+            labels: [],
+            datasets: []
+        };
+        let graphVariableMap = {}; // Mapeia deviceIndex_registerIndex -> dataset index
+        
+        // Função para atualizar lista de variáveis no gráfico
+        function updateGraphVariables() {
+            // Coleta variáveis marcadas para gráfico
+            const variablesToGraph = [];
+            graphVariableMap = {};
+            
+            // Verifica se devices está disponível
+            if (!devices || devices.length === 0) {
+                const graphSection = document.getElementById('realtimeGraphSection');
+                if (graphSection) {
+                    graphSection.style.display = 'none';
+                }
+                return;
+            }
+            
+            devices.forEach((device, deviceIndex) => {
+                if (device.registers) {
+                    device.registers.forEach((reg, registerIndex) => {
+                        if (reg.generateGraph && reg.variableName) {
+                            const key = deviceIndex + '_' + registerIndex;
+                            const deviceName = device.deviceName || 'Dispositivo ' + (deviceIndex + 1);
+                            const varName = reg.variableName || 'sem_nome';
+                            variablesToGraph.push({
+                                key: key,
+                                deviceIndex: deviceIndex,
+                                registerIndex: registerIndex,
+                                label: deviceName + ' - ' + varName,
+                                color: getColorForIndex(variablesToGraph.length)
+                            });
+                            graphVariableMap[key] = variablesToGraph.length - 1;
+                        }
+                    });
+                }
+            });
+            
+            // Mostra/esconde seção do gráfico
+            const graphSection = document.getElementById('realtimeGraphSection');
+            if (!graphSection) return;
+            
+            if (variablesToGraph.length > 0) {
+                graphSection.style.display = 'block';
+                initializeGraph(variablesToGraph);
+                
+                // Se o gráfico estava habilitado antes, mantém habilitado
+                const graphEnabledCheck = document.getElementById('graphEnabled');
+                if (graphEnabledCheck && graphEnabledCheck.checked && !graphUpdateInterval) {
+                    // Pequeno delay para garantir que o gráfico foi criado
+                    setTimeout(() => {
+                        toggleRealtimeGraph();
+                    }, 100);
+                }
+            } else {
+                graphSection.style.display = 'none';
+                if (realtimeChart) {
+                    realtimeChart.destroy();
+                    realtimeChart = null;
+                }
+                if (graphUpdateInterval) {
+                    clearInterval(graphUpdateInterval);
+                    graphUpdateInterval = null;
+                }
+            }
+        }
+        
+        // Função para obter cor única para cada variável
+        function getColorForIndex(index) {
+            const colors = [
+                '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF',
+                '#FF9F40', '#FF6384', '#C9CBCF', '#4BC0C0', '#FF6384'
+            ];
+            return colors[index % colors.length];
+        }
+        
+        // Inicializa o gráfico
+        function initializeGraph(variables) {
+            const canvas = document.getElementById('realtimeChart');
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Destrói gráfico anterior se existir
+            if (realtimeChart) {
+                realtimeChart.destroy();
+            }
+            
+            // Prepara datasets
+            const datasets = variables.map(v => ({
+                label: v.label,
+                data: [],
+                borderColor: v.color,
+                backgroundColor: v.color + '40',
+                borderWidth: 2,
+                fill: false,
+                tension: 0.1
+            }));
+            
+            // Cria novo gráfico
+            realtimeChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
+                    scales: {
+                        x: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Pontos de Aquisição'
+                            },
+                            ticks: {
+                                maxTicksLimit: 20
+                            }
+                        },
+                        y: {
+                            display: true,
+                            title: {
+                                display: true,
+                                text: 'Valor'
+                            }
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: true,
+                            position: 'top'
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false
+                        }
+                    }
+                }
+            });
+            
+            // Limpa dados anteriores
+            graphData.labels = [];
+            graphData.datasets = datasets;
+            realtimeChart.data = graphData;
+        }
+        
+        // Atualiza dados do gráfico
+        async function updateGraphData() {
+            if (!realtimeChart || !document.getElementById('graphEnabled').checked) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/calc/variables');
+                const data = await response.json();
+                
+                if (!data.devices) return;
+                
+                // Atualiza valores para cada variável no gráfico
+                data.devices.forEach((device, deviceIndex) => {
+                    if (device.registers) {
+                        device.registers.forEach((reg, registerIndex) => {
+                            const key = deviceIndex + '_' + registerIndex;
+                            const datasetIndex = graphVariableMap[key];
+                            
+                            if (datasetIndex !== undefined && reg.value !== undefined) {
+                                const dataset = realtimeChart.data.datasets[datasetIndex];
+                                
+                                // Adiciona novo ponto
+                                dataset.data.push(reg.value);
+                                
+                                // Limita a 1000 pontos (remove o mais antigo)
+                                if (dataset.data.length > MAX_GRAPH_POINTS) {
+                                    dataset.data.shift();
+                                }
+                            }
+                        });
+                    }
+                });
+                
+                // Atualiza labels (índices dos pontos)
+                const maxLength = Math.max(...realtimeChart.data.datasets.map(d => d.data.length), 0);
+                if (maxLength > 0) {
+                    realtimeChart.data.labels = Array.from({length: maxLength}, (_, i) => i + 1);
+                    
+                    // Limita labels também
+                    if (realtimeChart.data.labels.length > MAX_GRAPH_POINTS) {
+                        realtimeChart.data.labels = realtimeChart.data.labels.slice(-MAX_GRAPH_POINTS);
+                    }
+                    
+                    // Atualiza gráfico
+                    realtimeChart.update('none'); // 'none' para animação desabilitada (mais rápido)
+                    
+                    // Atualiza status
+                    const statusEl = document.getElementById('graphStatus');
+                    if (statusEl) {
+                        const pointCount = realtimeChart.data.datasets[0]?.data.length || 0;
+                        const intervalInput = document.getElementById('graphSamplingInterval');
+                        const intervalSeconds = intervalInput ? parseFloat(intervalInput.value) : 0.5;
+                        statusEl.textContent = `Ativo (${intervalSeconds}s) - ${pointCount}/${MAX_GRAPH_POINTS} pontos`;
+                    }
+                }
+            } catch (error) {
+                console.error('Erro ao atualizar gráfico:', error);
+            }
+        }
+        
+        // Atualiza intervalo de amostragem do gráfico
+        function updateGraphSamplingInterval() {
+            const intervalInput = document.getElementById('graphSamplingInterval');
+            if (!intervalInput) return;
+            
+            const intervalSeconds = parseFloat(intervalInput.value);
+            if (isNaN(intervalSeconds) || intervalSeconds < 0.1) {
+                intervalInput.value = 0.5;
+                return;
+            }
+            
+            // Salva no localStorage
+            localStorage.setItem('graphSamplingInterval', intervalSeconds.toString());
+            
+            // Se o gráfico está ativo, reinicia com novo intervalo
+            if (document.getElementById('graphEnabled').checked) {
+                if (graphUpdateInterval) {
+                    clearInterval(graphUpdateInterval);
+                }
+                const intervalMs = intervalSeconds * 1000;
+                graphUpdateInterval = setInterval(updateGraphData, intervalMs);
+                
+                const statusEl = document.getElementById('graphStatus');
+                if (statusEl) {
+                    statusEl.textContent = `Ativo (${intervalSeconds}s)`;
+                }
+            }
+        }
+        
+        // Liga/desliga atualização automática
+        function toggleRealtimeGraph() {
+            const enabled = document.getElementById('graphEnabled').checked;
+            const statusEl = document.getElementById('graphStatus');
+            const intervalInput = document.getElementById('graphSamplingInterval');
+            
+            if (enabled) {
+                // Obtém intervalo configurado (em segundos)
+                const intervalSeconds = intervalInput ? parseFloat(intervalInput.value) : 0.5;
+                const intervalMs = intervalSeconds * 1000;
+                
+                // Para intervalo anterior se existir
+                if (graphUpdateInterval) {
+                    clearInterval(graphUpdateInterval);
+                }
+                
+                // Inicia atualização com intervalo configurado
+                graphUpdateInterval = setInterval(updateGraphData, intervalMs);
+                
+                if (statusEl) {
+                    statusEl.textContent = `Ativo (${intervalSeconds}s)`;
+                    statusEl.style.color = '#28a745';
+                }
+            } else {
+                // Para atualização
+                if (graphUpdateInterval) {
+                    clearInterval(graphUpdateInterval);
+                    graphUpdateInterval = null;
+                }
+                if (statusEl) {
+                    statusEl.textContent = 'Pausado';
+                    statusEl.style.color = '#666';
+                }
             }
         }
         
@@ -1760,6 +2220,23 @@
         
         // Carrega configuracao ao iniciar
         loadAllConfig();
+        
+        // Carrega intervalo de amostragem do gráfico do localStorage
+        const savedInterval = localStorage.getItem('graphSamplingInterval');
+        if (savedInterval) {
+            const intervalInput = document.getElementById('graphSamplingInterval');
+            if (intervalInput) {
+                const intervalValue = parseFloat(savedInterval);
+                if (!isNaN(intervalValue) && intervalValue >= 0.1 && intervalValue <= 60) {
+                    intervalInput.value = intervalValue;
+                }
+            }
+        }
+        
+        // Inicializa gráfico após carregar tudo
+        setTimeout(() => {
+            updateGraphVariables();
+        }, 1000);
     </script>
 </body>
 </html>

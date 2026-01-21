@@ -25,6 +25,17 @@ O baud rate padrão é 9600. Para alterar, edite em `src/main.cpp`:
 
 Baud rates comuns: 9600, 19200, 38400, 57600, 115200
 
+## Configuração Serial Modbus (Paridade e Stop Bits)
+
+Além do baud rate, a interface web permite configurar:
+
+- **Bits de Dados**: 7 ou 8 (padrão: 8)
+- **Paridade**: Nenhuma, Par, Ímpar (padrão: Nenhuma)
+- **Stop Bits**: 1 ou 2 (padrão: 1)
+- **Start Bit**: 1 (fixo em UART)
+
+Essas opções ficam na seção **Modbus** da interface web e são salvas junto com a configuração.
+
 ## Personalização de Cálculos
 
 Edite a função `performCalculations()` em `src/main.cpp` para implementar sua lógica:

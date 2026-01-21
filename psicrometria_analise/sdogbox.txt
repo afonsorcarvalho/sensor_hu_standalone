@@ -1,0 +1,28 @@
+# Constantes da fórmula psicrométrica (ajustadas por calibração)
+# Método de calibração: Dogbox
+# Pontos de calibração: 8
+# Erro médio absoluto: 5.9801%
+# Erro máximo absoluto: 14.8313%
+# Erro RMS: 7.2479%
+
+# Constantes ajustadas:
+A = 20.494707
+B = 5.289222
+C = 600.000000
+D = 3.238757
+
+# Pontos de calibração utilizados:
+# TS = Temperatura do bulbo seco (°C)
+# TU = Temperatura do bulbo úmido (°C)
+# UR_Real = Umidade relativa real medida (%)
+# UR_Calculado = Umidade relativa calculada (%)
+# Erro_Absoluto = |UR_Real - UR_Calculado| (%)
+#     TS (°C)         TU (°C)         UR_Real (%)        UR_Calculado (%)     Erro_Absoluto (%)   
+1     26.100000       21.200000       48.800000          33.968715            14.831285           
+2     29.540000       26.680000       64.700000          62.462891            2.237109            
+3     28.670000       25.330000       60.100000          55.870496            4.229504            
+4     27.700000       23.690000       45.100000          46.623752            1.523752            
+5     26.850000       23.190000       41.100000          50.957131            9.857131            
+6     25.400000       22.100000       49.500000          55.275630            5.775630            
+7     30.800000       27.630000       53.600000          58.797616            5.197616            
+8     31.100000       28.300000       59.500000          63.688471            4.188471            

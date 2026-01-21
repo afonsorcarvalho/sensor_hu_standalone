@@ -144,12 +144,12 @@ def calibrar_constantes(pontos_calibracao, constantes_iniciais=None, metodo='trf
     
     # Define valores iniciais se não fornecidos
     if constantes_iniciais is None:
-        constantes_iniciais = [6.112, 17.67, 242.5, 1.8]
+        constantes_iniciais = [6.112, 17.67, 243.5, 1.8]
     
     # Limites para as constantes (para evitar valores inválidos)
     # A > 0, B > 0, C > 0, D > 0
-    limites_inferiores = [1.0, 1.0, 100.0, 0.1]
-    limites_superiores = [10.0, 25.0, 300.0, 5.0]
+    limites_inferiores = [0.01, 0.01, 1.0, 0.0008]
+    limites_superiores = [100.0, 100.0, 600.0, 5.0]
     
     resultado_otimizacao = None
     sucesso = True

@@ -9,10 +9,14 @@
 #include "kalman_filter.h"
 
 void performCalculations() {
+    
     // Verifica se há código de cálculo configurado
     if (strlen(config.calculationCode) == 0) {
         return;  // Nenhum cálculo configurado
     }
+    
+    // Habilita efeitos colaterais nas expressões (ex: display via Modbus)
+    setExpressionSideEffectsEnabled(true);
     
     // Prepara estrutura DeviceValues com todos os valores dos dispositivos
     // Aplica gain e offset antes de atribuir
@@ -243,8 +247,15 @@ void performCalculations() {
             
             // Escreve no Modbus
             uint8_t slaveAddr = config.devices[assignmentInfo.targetDeviceIndex].slaveAddress;
+            
+            // CRÍTICO: Yield antes de operação Modbus para manter webserver responsivo
+            yield();
+            
             node.begin(slaveAddr, Serial2);
             uint8_t writeResult = node.writeSingleRegister(targetReg->address, targetReg->value);
+            
+            // CRÍTICO: Yield após operação Modbus para manter webserver responsivo
+            yield();
             
             if (writeResult == node.ku8MBSuccess) {
                 // Log no console
@@ -314,5 +325,9 @@ void performCalculations() {
     delete[] lineBuffer;
     delete[] processedExpression;
     delete[] errorMsg;
+    
+    // CRÍTICO: Desabilita efeitos colaterais APÓS processar todas as linhas
+    // Isso garante que funções como display() funcionem durante todo o processamento
+    setExpressionSideEffectsEnabled(false);
 }
 

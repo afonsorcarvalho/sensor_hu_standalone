@@ -49,6 +49,12 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
 bool evaluateExpression(const char* expression, Variable* variables, int varCount, double* result, char* errorMsg = nullptr, size_t errorMsgSize = 0);
 
 /**
+ * @brief Habilita/desabilita efeitos colaterais (ex: escrita Modbus) nas funções de expressão
+ * @param enabled true para permitir efeitos colaterais, false para desabilitar
+ */
+void setExpressionSideEffectsEnabled(bool enabled);
+
+/**
  * @brief Encontra o valor de uma variável pelo nome
  * @param varName Nome da variável
  * @param variables Array de variáveis
