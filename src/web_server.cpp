@@ -24,6 +24,43 @@
 AsyncWebServer server(WEB_SERVER_PORT);
 AsyncWebSocket* consoleWebSocket = nullptr;
 
+// Controle de conexões simultâneas
+#define MAX_CONCURRENT_CONNECTIONS 4  // Limite de conexões simultâneas (recomendado: 4-5 para ESP32)
+static volatile int activeConnections = 0;
+static SemaphoreHandle_t connectionsMutex = nullptr;
+
+// Função auxiliar para verificar e incrementar conexões
+static bool tryAcquireConnection() {
+    if (connectionsMutex == nullptr) {
+        connectionsMutex = xSemaphoreCreateMutex();
+        if (connectionsMutex == nullptr) {
+            return false;
+        }
+    }
+    
+    if (xSemaphoreTake(connectionsMutex, portMAX_DELAY) == pdTRUE) {
+        if (activeConnections < MAX_CONCURRENT_CONNECTIONS) {
+            activeConnections++;
+            xSemaphoreGive(connectionsMutex);
+            return true;
+        }
+        xSemaphoreGive(connectionsMutex);
+    }
+    return false;
+}
+
+// Função auxiliar para liberar conexão
+static void releaseConnection() {
+    if (connectionsMutex != nullptr) {
+        if (xSemaphoreTake(connectionsMutex, portMAX_DELAY) == pdTRUE) {
+            if (activeConnections > 0) {
+                activeConnections--;
+            }
+            xSemaphoreGive(connectionsMutex);
+        }
+    }
+}
+
 bool initLittleFS() {
     if (!LittleFS.begin(true)) {
         Serial.println("Erro ao montar LittleFS");
@@ -42,25 +79,44 @@ void setupWebServer() {
     
     // Rota para página principal (interface de configuração)
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "text/html", "<html><body><h1>Servidor Ocupado</h1><p>Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.</p></body></html>");
+            return;
+        }
         handleRoot(request);
+        releaseConnection();
     });
     
     // Rota para resetar configurações para valores padrão (deve vir antes de /api/config)
     server.on("/api/config/reset", HTTP_POST, [](AsyncWebServerRequest *request){
-        if (request) {
-            handleResetConfig(request);
+        if (!request) return;
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
         }
+        handleResetConfig(request);
+        releaseConnection();
     });
     
     // Rota para exportar configurações (deve vir antes de /api/config)
     server.on("/api/config/export", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
         handleExportConfig(request);
+        releaseConnection();
     });
     
     // Rota para importar configurações (deve vir antes de /api/config)
     // Usa handler de body para acumular todos os chunks antes de processar
     server.on("/api/config/import", HTTP_POST,
         [](AsyncWebServerRequest *request){
+            // Verifica limite de conexões no início
+            if (!tryAcquireConnection()) {
+                request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+                return;
+            }
             // Handler de início - inicializa buffer se necessário
             request->_tempObject = new String();
         },
@@ -80,19 +136,30 @@ void setupWebServer() {
                     handleImportConfig(request, (uint8_t*)bodyBuffer->c_str(), bodyBuffer->length());
                     delete bodyBuffer;
                     request->_tempObject = nullptr;
+                    releaseConnection(); // Libera conexão após processar
                 }
             }
         });
     
     // Rota para obter configuração atual (JSON)
     server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
         handleGetConfig(request);
+        releaseConnection();
     });
     
     // Rota para salvar nova configuração (POST JSON)
     // Usa handler de body para acumular todos os chunks antes de processar
     server.on("/api/config", HTTP_POST, 
         [](AsyncWebServerRequest *request){
+            // Verifica limite de conexões no início
+            if (!tryAcquireConnection()) {
+                request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+                return;
+            }
             // Handler de início - inicializa buffer se necessário
             Serial.println("[Config] POST /api/config recebido");
             
@@ -140,6 +207,7 @@ void setupWebServer() {
             if (total == 0) {
                 Serial.println("[Config] ERRO: total é 0 - sem body");
                 request->send(400, "application/json", "{\"error\":\"Body vazio\"}");
+                releaseConnection(); // Libera conexão em caso de erro
                 return;
             }
             
@@ -187,6 +255,7 @@ void setupWebServer() {
                     // Limpa o buffer
                     delete bodyBuffer;
                     request->_tempObject = nullptr;
+                    releaseConnection(); // Libera conexão após processar
                 }
                 // Se ainda estamos recebendo chunks, apenas continua acumulando
                 // Não precisa fazer nada aqui - o AsyncWebServer continuará chamando este handler
@@ -194,17 +263,28 @@ void setupWebServer() {
                 // request->_tempObject é nullptr mesmo após tentar inicializar - erro crítico
                 Serial.println("[Config] ERRO CRÍTICO: Não foi possível inicializar buffer");
                 request->send(500, "application/json", "{\"error\":\"Erro interno: falha ao inicializar buffer\"}");
+                releaseConnection(); // Libera conexão em caso de erro
             }
         });
     
     // Rota para leitura manual de registros
     server.on("/api/read", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
         handleReadRegisters(request);
+        releaseConnection();
     });
     
     // Rota para reboot do sistema
     server.on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
         handleReboot(request);
+        // Não libera conexão aqui pois o sistema vai reiniciar
     });
     
     // Rota para obter horário atual do RTC
@@ -251,13 +331,68 @@ void setupWebServer() {
     
     // Rota para obter variáveis disponíveis
     server.on("/api/calc/variables", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
         handleGetVariables(request);
+        releaseConnection();
     });
     
     // Rota para escrever valor de variável
     server.on("/api/variable/write", HTTP_POST, [](AsyncWebServerRequest *request){}, NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
             handleWriteVariable(request, data, len);
+        });
+    
+    // Rota para listar arquivos do filesystem
+    server.on("/api/filesystem/list", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
+        handleListFiles(request);
+        releaseConnection();
+    });
+    
+    // Rota para baixar arquivo do filesystem
+    server.on("/api/filesystem/download", HTTP_GET, [](AsyncWebServerRequest *request){
+        if (!tryAcquireConnection()) {
+            request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+            return;
+        }
+        handleDownloadFile(request);
+        releaseConnection();
+    });
+    
+    // Rota para deletar arquivo do filesystem
+    server.on("/api/filesystem/delete", HTTP_POST, 
+        [](AsyncWebServerRequest *request){
+            // Verifica limite de conexões no início
+            if (!tryAcquireConnection()) {
+                request->send(503, "application/json", "{\"error\":\"Servidor ocupado. Limite de " + String(MAX_CONCURRENT_CONNECTIONS) + " conexoes simultaneas atingido. Tente novamente em alguns instantes.\"}");
+                return;
+            }
+            // Handler de início - inicializa buffer se necessário
+            request->_tempObject = new String();
+        },
+        NULL,  // onUpload - não usado
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+            // Handler de body - acumula chunks
+            if (request->_tempObject) {
+                String* bodyBuffer = (String*)request->_tempObject;
+                for (size_t i = 0; i < len; i++) {
+                    *bodyBuffer += (char)data[i];
+                }
+                
+                // Se recebeu todos os chunks, processa
+                if (index + len >= total && bodyBuffer->length() >= total) {
+                    handleDeleteFile(request, (uint8_t*)bodyBuffer->c_str(), bodyBuffer->length());
+                    delete bodyBuffer;
+                    request->_tempObject = nullptr;
+                    releaseConnection(); // Libera conexão após processar
+                }
+            }
         });
     
     // Inicia o servidor web
@@ -400,35 +535,58 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
         return;
     }
     
-    // Tamanho aumentado para suportar muitos dispositivos e registros
-    DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
-    DeserializationError error = deserializeJson(doc, body);
-    
-    if (error) {
-        Serial.print("[Config] ERRO ao deserializar JSON: ");
-        Serial.println(error.c_str());
-        Serial.print("[Config] Tamanho do body: ");
-        Serial.print(body.length());
-        Serial.println(" bytes");
-        Serial.print("[Config] Primeiros 200 caracteres: ");
-        Serial.println(body.substring(0, 200));
-        Serial.print("[Config] Últimos 200 caracteres: ");
-        int start = (body.length() > 200) ? body.length() - 200 : 0;
-        Serial.println(body.substring(start));
-        
-        String errorMsg = "{\"error\":\"JSON inválido: ";
-        errorMsg += error.c_str();
-        errorMsg += "\"}";
-        request->send(400, "application/json", errorMsg);
+    // CRÍTICO: pausa o processamento para evitar concorrência durante salvar config
+    g_processingPaused = true;
+
+    // Espera o ciclo atual terminar (até 2s) para evitar tocar no config no meio do uso
+    unsigned long waitStart = millis();
+    while (g_cycleInProgress && (millis() - waitStart) < 2000) {
+        yield();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    // Serializa múltiplos saves/imports com mutex (timeout curto para não travar async_tcp)
+    if (!lockConfig(pdMS_TO_TICKS(100))) {
+        g_processingPaused = false;
+        request->send(503, "application/json", "{\"error\":\"Sistema ocupado salvando/atualizando configuracao. Tente novamente.\"}");
         return;
     }
-    
-    Serial.println("[Config] JSON deserializado com sucesso");
-    
-    // Log para debug
-    Serial.print("[Config] JSON recebido com sucesso. Tamanho: ");
-    Serial.print(body.length());
-    Serial.println(" bytes");
+
+    // CRÍTICO: Processa o JSON em um escopo separado para garantir que o DynamicJsonDocument
+    // seja destruído antes de chamar saveConfig(), evitando corrupção de heap
+    // (saveConfig() também cria um DynamicJsonDocument de 24KB)
+    {
+        // Tamanho aumentado para suportar muitos dispositivos e registros
+        DynamicJsonDocument doc(24576);  // 24KB para garantir espaço suficiente
+        DeserializationError error = deserializeJson(doc, body);
+        
+        if (error) {
+            Serial.print("[Config] ERRO ao deserializar JSON: ");
+            Serial.println(error.c_str());
+            Serial.print("[Config] Tamanho do body: ");
+            Serial.print(body.length());
+            Serial.println(" bytes");
+            Serial.print("[Config] Primeiros 200 caracteres: ");
+            Serial.println(body.substring(0, 200));
+            Serial.print("[Config] Últimos 200 caracteres: ");
+            int start = (body.length() > 200) ? body.length() - 200 : 0;
+            Serial.println(body.substring(start));
+            
+            String errorMsg = "{\"error\":\"JSON inválido: ";
+            errorMsg += error.c_str();
+            errorMsg += "\"}";
+                request->send(400, "application/json", errorMsg);
+                unlockConfig();
+                g_processingPaused = false;
+            return;
+        }
+        
+        Serial.println("[Config] JSON deserializado com sucesso");
+        
+        // Log para debug
+        Serial.print("[Config] JSON recebido com sucesso. Tamanho: ");
+        Serial.print(body.length());
+        Serial.println(" bytes");
     
     // Atualiza configuração do sistema
     uint32_t newBaudRate = doc["baudRate"] | MODBUS_SERIAL_BAUD;
@@ -828,12 +986,29 @@ void handleSaveConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len)
             }
         }
     }
+    } // FIM DO ESCOPO DO DOCUMENTO JSON - doc será destruído aqui
+    
+    // CRÍTICO: Libera também a string body para liberar memória antes de saveConfig()
+    body = "";
+    
+    // CRÍTICO: Dá tempo ao sistema para liberar memória e fazer garbage collection
+    // antes de alocar novamente em saveConfig() (que cria um DynamicJsonDocument de 24KB)
+    yield();
+    vTaskDelay(20 / portTICK_PERIOD_MS); // Aumentado de 10ms para 20ms
+    
+    // Força garbage collection adicional
+    yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     
     // Salva na EEPROM (memória não volátil)
     Serial.println("[Config] Salvando configuração na memória não volátil...");
     consolePrint("[Acao] Botao 'Salvar Todas as Configuracoes' clicado\r\n");
     
     bool saveSuccess = saveConfig();
+
+    // Libera o mutex do config após salvar (independente do resultado)
+    unlockConfig();
+    g_processingPaused = false;
     
     if (saveSuccess) {
         Serial.println("[Config] Configuração salva com sucesso!");
@@ -854,6 +1029,12 @@ void handleReadRegisters(AsyncWebServerRequest *request) {
     // CRÍTICO: Permite que outras tarefas executem durante a leitura Modbus
     // Isso evita que o webserver trave completamente se houver timeout no Modbus
     yield();
+
+    // CRÍTICO: protege acesso ao config (e ao Modbus/ciclo) durante leitura manual
+    if (!lockConfig(pdMS_TO_TICKS(2000))) {
+        request->send(503, "application/json", "{\"error\":\"Sistema ocupado. Tente novamente.\"}");
+        return;
+    }
     
     readAllDevices();
     
@@ -876,6 +1057,8 @@ void handleReadRegisters(AsyncWebServerRequest *request) {
             regObj["value"] = config.devices[i].registers[j].value;
         }
     }
+
+    unlockConfig();
     
     String response;
     serializeJson(doc, response);
@@ -970,7 +1153,12 @@ void handleGetCurrentTime(AsyncWebServerRequest *request) {
 
 void handleSetTime(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
     if (data && len > 0) {
-        String body = String((char*)data);
+        // CRÍTICO: data NÃO é garantido ser nulo-terminado. Monta o body usando len.
+        String body;
+        body.reserve(len + 1);
+        for (size_t i = 0; i < len; i++) {
+            body += (char)data[i];
+        }
         
         DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, body);
@@ -1398,6 +1586,18 @@ void restoreWiFiState(WiFiMode_t originalMode, bool wasConnectedSTA, const Strin
     Serial.flush();
     
     yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Delay para estabilização
+    
+    // CRÍTICO: Copia o SSID para uma variável local antes de usar
+    // Isso evita problemas de memória se a String original for destruída
+    char ssidBuffer[33] = {0}; // WiFi SSID máximo é 32 caracteres + null terminator
+    if (wasConnectedSTA && originalSSID.length() > 0 && originalSSID.length() < 33) {
+        strncpy(ssidBuffer, originalSSID.c_str(), sizeof(ssidBuffer) - 1);
+        ssidBuffer[sizeof(ssidBuffer) - 1] = '\0'; // Garante null terminator
+    }
+    
+    yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
     
     // Restaura o modo WiFi original
     if (originalMode == WIFI_AP) {
@@ -1405,42 +1605,113 @@ void restoreWiFiState(WiFiMode_t originalMode, bool wasConnectedSTA, const Strin
         // Ao mudar de AP_STA para AP, o AP continua funcionando
         WiFi.mode(WIFI_AP);
         yield();
-        delay(50);  // Delay mínimo para estabilização
+        vTaskDelay(50 / portTICK_PERIOD_MS);  // Delay para estabilização
         yield();
         
         // Garante que o AP está configurado (pode não ser necessário, mas é seguro)
         const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
         const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
-        WiFi.softAP(apSSID, apPassword);
-        yield();
+        
+        // Valida ponteiros antes de usar
+        if (apSSID != nullptr && apPassword != nullptr) {
+            WiFi.softAP(apSSID, apPassword);
+            yield();
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
     } else if (originalMode == WIFI_STA) {
         // Se estava em STA, volta para STA
         WiFi.mode(WIFI_STA);
         yield();
-        delay(50);
+        vTaskDelay(100 / portTICK_PERIOD_MS); // Delay maior para estabilização após mudança de modo
         yield();
         
         // Se estava conectado como STA, tenta reconectar (não-bloqueante)
-        if (wasConnectedSTA && originalSSID.length() > 0) {
-            WiFi.begin(originalSSID.c_str());
-            yield();
+        // Usa o buffer local ao invés de c_str() diretamente
+        if (wasConnectedSTA && strlen(ssidBuffer) > 0) {
+            // Verifica se já está conectado antes de tentar reconectar
+            if (WiFi.status() != WL_CONNECTED) {
+                // CRÍTICO: Desconecta explicitamente antes de reconectar para limpar estado
+                WiFi.disconnect(false); // false = não apaga credenciais salvas
+                yield();
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+                yield();
+                
+                // CRÍTICO: Verifica se o buffer é válido antes de usar
+                // CRÍTICO: Usa a senha da configuração se o SSID corresponder
+                const char* password = "";
+                if (strcmp(ssidBuffer, config.wifi.staSSID) == 0) {
+                    // Se o SSID corresponde ao configurado, usa a senha salva
+                    password = (strlen(config.wifi.staPassword) > 0) ? config.wifi.staPassword : "";
+                }
+                
+                if (strlen(password) > 0) {
+                    WiFi.begin(ssidBuffer, password);
+                    Serial.print("[WiFi] Tentando reconectar a rede: ");
+                    Serial.println(ssidBuffer);
+                } else {
+                    // Tenta sem senha (para redes abertas ou se senha não estiver configurada)
+                    WiFi.begin(ssidBuffer);
+                    Serial.print("[WiFi] Tentando reconectar a rede (sem senha): ");
+                    Serial.println(ssidBuffer);
+                }
+                yield();
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+            } else {
+                Serial.println("[WiFi] Ja conectado, nao precisa reconectar");
+            }
         }
     } else if (originalMode == WIFI_AP_STA) {
         // Se já estava em AP_STA, não precisa mudar nada
         // Apenas garante que o AP está configurado
         const char* apSSID = (strlen(config.wifi.apSSID) > 0) ? config.wifi.apSSID : AP_SSID;
         const char* apPassword = (strlen(config.wifi.apPassword) > 0) ? config.wifi.apPassword : AP_PASSWORD;
-        WiFi.softAP(apSSID, apPassword);
-        yield();
+        
+        // Valida ponteiros antes de usar
+        if (apSSID != nullptr && apPassword != nullptr) {
+            WiFi.softAP(apSSID, apPassword);
+            yield();
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        }
         
         // Se estava conectado como STA, tenta reconectar (não-bloqueante)
-        if (wasConnectedSTA && originalSSID.length() > 0) {
-            WiFi.begin(originalSSID.c_str());
-            yield();
+        // Usa o buffer local ao invés de c_str() diretamente
+        if (wasConnectedSTA && strlen(ssidBuffer) > 0) {
+            // Verifica se já está conectado antes de tentar reconectar
+            if (WiFi.status() != WL_CONNECTED) {
+                // CRÍTICO: Desconecta explicitamente antes de reconectar para limpar estado
+                WiFi.disconnect(false); // false = não apaga credenciais salvas
+                yield();
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+                yield();
+                
+                // CRÍTICO: Verifica se o buffer é válido antes de usar
+                // CRÍTICO: Usa a senha da configuração se o SSID corresponder
+                const char* password = "";
+                if (strcmp(ssidBuffer, config.wifi.staSSID) == 0) {
+                    // Se o SSID corresponde ao configurado, usa a senha salva
+                    password = (strlen(config.wifi.staPassword) > 0) ? config.wifi.staPassword : "";
+                }
+                
+                if (strlen(password) > 0) {
+                    WiFi.begin(ssidBuffer, password);
+                    Serial.print("[WiFi] Tentando reconectar a rede: ");
+                    Serial.println(ssidBuffer);
+                } else {
+                    // Tenta sem senha (para redes abertas ou se senha não estiver configurada)
+                    WiFi.begin(ssidBuffer);
+                    Serial.print("[WiFi] Tentando reconectar a rede (sem senha): ");
+                    Serial.println(ssidBuffer);
+                }
+                yield();
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+            } else {
+                Serial.println("[WiFi] Ja conectado, nao precisa reconectar");
+            }
         }
     }
     
     yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS);
 }
 
 void handleGetVariables(AsyncWebServerRequest *request) {
@@ -1604,7 +1875,27 @@ void handleExportConfig(AsyncWebServerRequest *request) {
 
 void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
     if (data && len > 0) {
-        String body = String((char*)data);
+        // CRÍTICO: pausa o processamento para evitar concorrência durante import
+        g_processingPaused = true;
+        unsigned long waitStart = millis();
+        while (g_cycleInProgress && (millis() - waitStart) < 2000) {
+            yield();
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+
+        // Timeout curto para não travar async_tcp
+        if (!lockConfig(pdMS_TO_TICKS(100))) {
+            g_processingPaused = false;
+            request->send(503, "application/json", "{\"error\":\"Sistema ocupado salvando/atualizando configuracao. Tente novamente.\"}");
+            return;
+        }
+
+        // CRÍTICO: data NÃO é garantido ser nulo-terminado. Monta o body usando len.
+        String body;
+        body.reserve(len + 1);
+        for (size_t i = 0; i < len; i++) {
+            body += (char)data[i];
+        }
         
         // Usa a mesma lógica de handleSaveConfig para processar o JSON
         DynamicJsonDocument doc(24576);
@@ -1612,6 +1903,8 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
         
         if (error) {
             request->send(400, "application/json", "{\"error\":\"JSON inválido\"}");
+            unlockConfig();
+            g_processingPaused = false;
             return;
         }
         
@@ -1918,6 +2211,8 @@ void handleImportConfig(AsyncWebServerRequest *request, uint8_t *data, size_t le
         
         // Salva a configuração importada
         saveConfig();
+        unlockConfig();
+        g_processingPaused = false;
         
         request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Configuração importada com sucesso\"}");
     } else {
@@ -1932,8 +2227,24 @@ void handleResetConfig(AsyncWebServerRequest *request) {
     
     Serial.println("Reset de configuração solicitado via API");
     consolePrint("[Acao] Reset de configuracoes solicitado\r\n");
+
+    // CRÍTICO: pausa o processamento para evitar concorrência durante reset
+    g_processingPaused = true;
+    unsigned long waitStart = millis();
+    while (g_cycleInProgress && (millis() - waitStart) < 2000) {
+        yield();
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    if (!lockConfig(pdMS_TO_TICKS(100))) {
+        g_processingPaused = false;
+        request->send(503, "application/json", "{\"status\":\"error\",\"error\":\"Sistema ocupado. Tente novamente.\"}");
+        return;
+    }
     
     bool success = resetConfig();
+    unlockConfig();
+    g_processingPaused = false;
     
     if (success) {
         Serial.println("Configuração resetada com sucesso");
@@ -1948,7 +2259,12 @@ void handleResetConfig(AsyncWebServerRequest *request) {
 
 void handleTestCalculation(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
     if (data && len > 0) {
-        String body = String((char*)data);
+        // CRÍTICO: data NÃO é garantido ser nulo-terminado. Monta o body usando len.
+        String body;
+        body.reserve(len + 1);
+        for (size_t i = 0; i < len; i++) {
+            body += (char)data[i];
+        }
         
         DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, body);
@@ -2183,7 +2499,12 @@ void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t l
         return;
     }
     
-    String body = String((char*)data);
+    // CRÍTICO: data NÃO é garantido ser nulo-terminado. Monta o body usando len.
+    String body;
+    body.reserve(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        body += (char)data[i];
+    }
     DynamicJsonDocument doc(512);
     DeserializationError error = deserializeJson(doc, body);
     
@@ -2311,3 +2632,216 @@ void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t l
     }
 }
 
+void handleListFiles(AsyncWebServerRequest *request) {
+    Serial.println("[Filesystem] Listando arquivos...");
+    
+    if (!LittleFS.begin(true)) {
+        Serial.println("[Filesystem] ERRO: Falha ao montar LittleFS");
+        request->send(500, "application/json", "{\"error\":\"Falha ao montar filesystem\"}");
+        return;
+    }
+    
+    DynamicJsonDocument doc(4096);
+    JsonArray filesArray = doc.createNestedArray("files");
+    
+    size_t totalSize = 0;
+    int fileCount = 0;
+    
+    // Lista todos os arquivos no filesystem
+    File root = LittleFS.open("/");
+    if (!root) {
+        Serial.println("[Filesystem] ERRO: Falha ao abrir diretório raiz");
+        request->send(500, "application/json", "{\"error\":\"Falha ao abrir diretório raiz\"}");
+        return;
+    }
+    
+    if (!root.isDirectory()) {
+        Serial.println("[Filesystem] ERRO: Raiz não é um diretório");
+        root.close();
+        request->send(500, "application/json", "{\"error\":\"Raiz não é um diretório\"}");
+        return;
+    }
+    
+    File file = root.openNextFile();
+    while (file) {
+        if (!file.isDirectory()) {
+            JsonObject fileObj = filesArray.createNestedObject();
+            String fileName = String(file.name());
+            // Remove o "/" inicial se existir
+            if (fileName.startsWith("/")) {
+                fileName = fileName.substring(1);
+            }
+            fileObj["name"] = fileName;
+            fileObj["size"] = file.size();
+            totalSize += file.size();
+            fileCount++;
+            
+            Serial.print("[Filesystem] Arquivo encontrado: ");
+            Serial.print(fileName);
+            Serial.print(" (");
+            Serial.print(file.size());
+            Serial.println(" bytes)");
+        }
+        file = root.openNextFile();
+    }
+    root.close();
+    
+    // Obtém informações do filesystem
+    // Nota: LittleFS não fornece FSInfo diretamente, então calculamos manualmente
+    // O tamanho total do LittleFS é tipicamente ~1.5MB no ESP32-S3
+    size_t totalBytes = 1536000; // Aproximação: 1.5MB (valor típico)
+    size_t usedBytes = totalSize; // Usa o tamanho total dos arquivos como aproximação
+    
+    doc["totalSize"] = totalSize;
+    doc["freeSpace"] = (totalBytes > usedBytes) ? (totalBytes - usedBytes) : 0;
+    doc["totalSpace"] = totalBytes;
+    doc["usedSpace"] = usedBytes;
+    doc["fileCount"] = fileCount;
+    
+    String response;
+    serializeJson(doc, response);
+    
+    Serial.print("[Filesystem] Total de arquivos: ");
+    Serial.print(fileCount);
+    Serial.print(", Espaço usado: ");
+    Serial.print(usedBytes);
+    Serial.print(" bytes, Espaço livre: ");
+    Serial.print((totalBytes > usedBytes) ? (totalBytes - usedBytes) : 0);
+    Serial.println(" bytes");
+    
+    request->send(200, "application/json", response);
+}
+
+void handleDownloadFile(AsyncWebServerRequest *request) {
+    // Obtém o nome do arquivo do parâmetro de query
+    if (!request->hasParam("file")) {
+        request->send(400, "application/json", "{\"error\":\"Parâmetro 'file' não fornecido\"}");
+        return;
+    }
+    
+    String filename = "/" + request->getParam("file")->value();
+    
+    // Sanitiza o nome do arquivo (remove ".." e "/" extras para segurança)
+    filename.replace("..", "");
+    if (!filename.startsWith("/")) {
+        filename = "/" + filename;
+    }
+    
+    Serial.print("[Filesystem] Baixando arquivo: ");
+    Serial.println(filename);
+    
+    if (!LittleFS.begin(true)) {
+        Serial.println("[Filesystem] ERRO: Falha ao montar LittleFS");
+        request->send(500, "application/json", "{\"error\":\"Falha ao montar filesystem\"}");
+        return;
+    }
+    
+    if (!LittleFS.exists(filename)) {
+        Serial.println("[Filesystem] ERRO: Arquivo não encontrado");
+        request->send(404, "application/json", "{\"error\":\"Arquivo não encontrado\"}");
+        return;
+    }
+    
+    File file = LittleFS.open(filename, "r");
+    if (!file) {
+        Serial.println("[Filesystem] ERRO: Falha ao abrir arquivo");
+        request->send(500, "application/json", "{\"error\":\"Falha ao abrir arquivo\"}");
+        return;
+    }
+    
+    // Determina o tipo MIME baseado na extensão
+    String contentType = "application/octet-stream";
+    if (filename.endsWith(".html")) {
+        contentType = "text/html";
+    } else if (filename.endsWith(".css")) {
+        contentType = "text/css";
+    } else if (filename.endsWith(".js")) {
+        contentType = "application/javascript";
+    } else if (filename.endsWith(".json")) {
+        contentType = "application/json";
+    } else if (filename.endsWith(".txt")) {
+        contentType = "text/plain";
+    } else if (filename.endsWith(".png")) {
+        contentType = "image/png";
+    } else if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) {
+        contentType = "image/jpeg";
+    }
+    
+    // Envia o arquivo
+    request->send(LittleFS, filename, contentType);
+    
+    Serial.print("[Filesystem] Arquivo enviado: ");
+    Serial.print(filename);
+    Serial.print(" (");
+    Serial.print(file.size());
+    Serial.println(" bytes)");
+    
+    file.close();
+}
+
+void handleDeleteFile(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
+    if (!data || len == 0) {
+        request->send(400, "application/json", "{\"error\":\"Body não fornecido\"}");
+        return;
+    }
+    
+    // Cria string do body
+    String body;
+    body.reserve(len + 1);
+    for (size_t i = 0; i < len; i++) {
+        body += (char)data[i];
+    }
+    
+    DynamicJsonDocument doc(512);
+    DeserializationError error = deserializeJson(doc, body);
+    
+    if (error) {
+        request->send(400, "application/json", "{\"error\":\"JSON inválido\"}");
+        return;
+    }
+    
+    if (!doc.containsKey("filename")) {
+        request->send(400, "application/json", "{\"error\":\"Campo 'filename' não fornecido\"}");
+        return;
+    }
+    
+    String filename = "/" + doc["filename"].as<String>();
+    
+    // Sanitiza o nome do arquivo (remove ".." e "/" extras para segurança)
+    filename.replace("..", "");
+    if (!filename.startsWith("/")) {
+        filename = "/" + filename;
+    }
+    
+    Serial.print("[Filesystem] Deletando arquivo: ");
+    Serial.println(filename);
+    
+    if (!LittleFS.begin(true)) {
+        Serial.println("[Filesystem] ERRO: Falha ao montar LittleFS");
+        request->send(500, "application/json", "{\"error\":\"Falha ao montar filesystem\"}");
+        return;
+    }
+    
+    if (!LittleFS.exists(filename)) {
+        Serial.println("[Filesystem] ERRO: Arquivo não encontrado");
+        request->send(404, "application/json", "{\"error\":\"Arquivo não encontrado\"}");
+        return;
+    }
+    
+    // Proteção: não permite deletar index.html (arquivo crítico)
+    if (filename == "/index.html" || filename == "index.html") {
+        Serial.println("[Filesystem] ERRO: Não é permitido deletar index.html");
+        request->send(403, "application/json", "{\"error\":\"Não é permitido deletar index.html\"}");
+        return;
+    }
+    
+    bool deleted = LittleFS.remove(filename);
+    
+    if (deleted) {
+        Serial.println("[Filesystem] Arquivo deletado com sucesso");
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Arquivo deletado com sucesso\"}");
+    } else {
+        Serial.println("[Filesystem] ERRO: Falha ao deletar arquivo");
+        request->send(500, "application/json", "{\"error\":\"Falha ao deletar arquivo\"}");
+    }
+}

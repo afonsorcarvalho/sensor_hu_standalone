@@ -118,6 +118,9 @@ void setupModbus(uint32_t baudRate, uint32_t serialConfig) {
 }
 
 void readAllDevices() {
+    if (g_processingPaused) {
+        return;
+    }
     
     static unsigned long lastReadTime = 0;
     unsigned long currentTime = millis();
@@ -129,6 +132,9 @@ void readAllDevices() {
     }
     
     for (int i = 0; i < config.deviceCount; i++) {
+        if (g_processingPaused) {
+            return;
+        }
         // CRÍTICO: Yield permite que o webserver e outras tarefas executem
         // Evita que a leitura Modbus trave todo o sistema
         yield();
@@ -143,6 +149,9 @@ void readAllDevices() {
         node.begin(slaveAddr, Serial2);
         
         for (int j = 0; j < config.devices[i].registerCount; j++) {
+            if (g_processingPaused) {
+                return;
+            }
             // CRÍTICO: Yield antes de cada leitura para manter webserver responsivo
             yield();
             
@@ -256,8 +265,14 @@ void readAllDevices() {
 }
 
 void writeOutputRegisters() {
+    if (g_processingPaused) {
+        return;
+    }
     
     for (int i = 0; i < config.deviceCount; i++) {
+        if (g_processingPaused) {
+            return;
+        }
         if (!config.devices[i].enabled) {
             continue;
         }
@@ -268,6 +283,9 @@ void writeOutputRegisters() {
         node.begin(slaveAddr, Serial2);
         
         for (int j = 0; j < config.devices[i].registerCount; j++) {
+            if (g_processingPaused) {
+                return;
+            }
             // CRÍTICO: Yield antes de cada escrita para manter webserver responsivo
             yield();
             

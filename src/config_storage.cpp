@@ -6,11 +6,17 @@
 #include "config_storage.h"
 #include <ArduinoJson.h>
 #include "config.h"
+#include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // Variável global
 Preferences preferences;
 
 void loadConfig() {
+    // CRÍTICO: protege acesso ao config durante load (evita concorrência com loop/web)
+    (void)lockConfig(portMAX_DELAY);
+
     preferences.begin("modbus", true); // Modo read-only
     
     // Tenta carregar configuração
@@ -81,6 +87,7 @@ void loadConfig() {
         }
         
         Serial.println("Nenhuma configuração encontrada, usando padrão");
+        unlockConfig();
         return;
     }
     
@@ -96,6 +103,7 @@ void loadConfig() {
         Serial.print(configJson.length());
         Serial.println(" bytes");
         config.deviceCount = 0;
+        unlockConfig();
         return;
     }
     
@@ -356,9 +364,14 @@ void loadConfig() {
     Serial.print("Configuracao carregada: ");
     Serial.print(config.deviceCount);
     Serial.println(" dispositivos");
+
+    unlockConfig();
 }
 
 bool saveConfig() {
+    // CRÍTICO: protege acesso ao config durante save (evita concorrência com loop/web)
+    (void)lockConfig(portMAX_DELAY);
+
     preferences.begin("modbus", false); // Modo read-write
     
     // Cria JSON da configuração
@@ -447,16 +460,21 @@ bool saveConfig() {
         // IMPORTANTE: Atualiza registerCount baseado no tamanho real do array salvo
         // Isso garante sincronização entre registerCount e o array de registros
         deviceObj["registerCount"] = registersArray.size();
-        config.devices[i].registerCount = registersArray.size();
+        // NÃO altera config.devices[i].registerCount aqui: salvar não deve mutar o config.
     }
     
+    // CRÍTICO: Reserva espaço para a string JSON antes de serializar para evitar fragmentação
+    // Estima tamanho baseado no documento (pode ser menor que o tamanho do doc)
     String configJson;
+    configJson.reserve(20000);  // Reserva espaço para evitar realocações
+    
     size_t jsonSize = serializeJson(doc, configJson);
     
     // Verifica se o JSON foi serializado corretamente
     if (jsonSize == 0) {
         Serial.println("ERRO: Falha ao serializar configuração JSON");
         preferences.end();
+        unlockConfig();
         return false;
     }
     
@@ -467,11 +485,85 @@ bool saveConfig() {
     
     // Verifica se o JSON cabe no Preferences (limite de ~20KB por chave)
     if (configJson.length() > 20000) {
-        Serial.println("AVISO: JSON muito grande, pode haver problemas ao salvar");
+        Serial.println("ERRO: JSON muito grande para salvar no Preferences (limite: 20KB)");
+        preferences.end();
+        unlockConfig();
+        return false;
     }
     
-    bool saved = preferences.putString("config", configJson);
+    // CRÍTICO: Verifica se a string é válida antes de salvar
+    if (configJson.length() == 0 || configJson.c_str() == nullptr) {
+        Serial.println("ERRO: String JSON inválida ou vazia");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    // CRÍTICO: Dá tempo ao sistema antes de salvar (evita problemas de timing)
+    yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Aumentado de 5ms para 10ms
+    
+    // CRÍTICO: Cria uma cópia do ponteiro e valida antes de usar
+    // Isso garante que o ponteiro não seja invalidado durante a operação
+    bool saved = false;
+    const char* jsonCStr = configJson.c_str();
+    
+    // Validações adicionais antes de salvar
+    if (jsonCStr == nullptr) {
+        Serial.println("ERRO: Ponteiro JSON é nullptr");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    size_t jsonLen = strlen(jsonCStr);
+    if (jsonLen == 0) {
+        Serial.println("ERRO: String JSON está vazia");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    if (jsonLen > 20000) {
+        Serial.println("ERRO: JSON muito grande para salvar");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    // CRÍTICO: Verifica se o ponteiro aponta para memória válida
+    // Tenta acessar o primeiro e último caractere para validar
+    if (jsonCStr[0] != '{' || jsonCStr[jsonLen - 1] != '}') {
+        Serial.println("ERRO: JSON não parece válido (não começa/termina com {})");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    // CRÍTICO: Salva no Preferences usando const char* diretamente
+    // Adiciona delay adicional antes da operação crítica
+    yield();
+    vTaskDelay(5 / portTICK_PERIOD_MS);
+    
+    // Tenta salvar
+    saved = preferences.putString("config", jsonCStr);
+    
+    if (!saved) {
+        Serial.println("ERRO: putString retornou false");
+        preferences.end();
+        unlockConfig();
+        return false;
+    }
+    
+    // CRÍTICO: Libera a string imediatamente após salvar para liberar memória
+    configJson = "";
+    
+    // Dá mais um tempo para garantir que a escrita foi concluída
+    yield();
+    vTaskDelay(10 / portTICK_PERIOD_MS); // Aumentado de 0 para 10ms
+    
     preferences.end();
+    unlockConfig();
     
     if (saved) {
         Serial.println("Configuração salva com sucesso");
@@ -493,6 +585,9 @@ bool saveConfig() {
 
 bool resetConfig() {
     Serial.println("Resetando configurações para valores padrão...");
+
+    // CRÍTICO: protege acesso ao config durante reset
+    (void)lockConfig(portMAX_DELAY);
     
     // Limpa a configuração salva
     preferences.begin("modbus", false); // Modo read-write
@@ -583,9 +678,11 @@ bool resetConfig() {
     
     if (saved) {
         Serial.println("Configuração resetada e salva com sucesso");
+        unlockConfig();
         return true;
     } else {
         Serial.println("ERRO: Falha ao salvar configuração padrão após reset");
+        unlockConfig();
         return false;
     }
 }

@@ -7,6 +7,10 @@
 #define CONFIG_H
 
 #include <Arduino.h>
+// CRÍTICO: usamos mutex (FreeRTOS) para proteger acesso concorrente ao config
+// durante salvar/importar e durante o ciclo de leitura/cálculo/escrita.
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // ==================== DEFINIÇÕES ====================
 #define AP_SSID "ESP32-Modbus-Config"
@@ -149,6 +153,31 @@ struct SystemConfig {
 // ==================== VARIÁVEIS GLOBAIS EXTERNAS ====================
 // Declaradas em config.cpp
 extern struct SystemConfig config;
+
+// ==================== PROTEÇÃO DE CONCORRÊNCIA (CONFIG MUTEX) ====================
+// Mutex recursivo para permitir lock aninhado (ex: handleSaveConfig() -> saveConfig()).
+extern SemaphoreHandle_t g_configMutex;
+
+// Flags globais para coordenar pausa do ciclo (evita WDT e concorrência durante save/import/reset)
+extern volatile bool g_processingPaused;
+extern volatile bool g_cycleInProgress;
+
+/**
+ * @brief Inicializa o mutex recursivo do config (chamar no setup antes do loop).
+ */
+void initConfigMutex();
+
+/**
+ * @brief Tenta adquirir o mutex do config.
+ * @param timeoutTicks Timeout em ticks (use pdMS_TO_TICKS(ms)).
+ * @return true se adquiriu, false caso contrário.
+ */
+bool lockConfig(TickType_t timeoutTicks = portMAX_DELAY);
+
+/**
+ * @brief Libera o mutex do config.
+ */
+void unlockConfig();
 
 #endif // CONFIG_H
 

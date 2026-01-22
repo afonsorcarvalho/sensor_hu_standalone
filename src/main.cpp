@@ -69,6 +69,10 @@ void setup() {
     // Carrega configuração salva
     Serial.println("Carregando configuração...");
     Serial.flush();
+
+    // CRÍTICO: inicializa mutex do config antes de carregar/usar config em múltiplas tasks
+    initConfigMutex();
+
     loadConfig();
     Serial.println("Configuração carregada!");
     Serial.flush();
@@ -261,18 +265,27 @@ void loop() {
     unsigned long currentTime = millis();
     if (currentTime - lastCalculationTime >= CALCULATION_INTERVAL_MS) {
         lastCalculationTime = currentTime;
-        
-        // Lê todos os dispositivos
-        readAllDevices();
-        
-        // Realiza cálculos customizados
-        performCalculations();
-        
-        // Escreve resultados nos registros de saída
-        writeOutputRegisters();
-        
-        Serial.println("Ciclo de leitura/cálculo/escrita executado");
-        Serial.flush(); // Força envio imediato para debug
+
+        // CRÍTICO: se estiver pausado (ex: salvando config), não executa Modbus/cálculos
+        if (g_processingPaused) {
+            Serial.println("[Sistema] Processamento pausado - pulando ciclo de leitura/cálculo/escrita");
+        } else {
+            g_cycleInProgress = true;
+
+            // Lê todos os dispositivos
+            readAllDevices();
+
+            // Realiza cálculos customizados
+            performCalculations();
+
+            // Escreve resultados nos registros de saída
+            writeOutputRegisters();
+
+            g_cycleInProgress = false;
+
+            Serial.println("Ciclo de leitura/cálculo/escrita executado");
+            Serial.flush(); // Força envio imediato para debug
+        }
     }
     
     delay(10);

@@ -221,6 +221,7 @@
             <button class="menu-btn" onclick="showSection('wifi')">Rede WiFi</button>
             <button class="menu-btn" onclick="showSection('rtc')">Data Hora (RTC)</button>
             <button class="menu-btn" onclick="showSection('wireguard')">WireGuard VPN</button>
+            <button class="menu-btn" onclick="showSection('filesystem')">Filesystem</button>
             <button class="menu-btn" onclick="showSection('console')">Console</button>
         </div>
 
@@ -301,7 +302,20 @@
                     <button class="btn btn-info" onclick="loadVariables()">Carregar Variaveis Disponiveis</button>
                 </div>
                 <div id="variablesList" style="margin-top: 15px; padding: 10px; background: white; border-radius: 4px; max-height: 200px; overflow-y: auto; display: none;">
-                    <h4 style="margin: 0 0 10px 0;">Variaveis Disponiveis:</h4>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h4 style="margin: 0;">Variaveis Disponiveis:</h4>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label style="display: flex; align-items: center; gap: 5px; font-size: 12px;">
+                                <input type="checkbox" id="variablesAutoUpdate" onchange="toggleVariablesAutoUpdate()">
+                                Atualizacao Automatica
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 5px; font-size: 12px;">
+                                Intervalo (s):
+                                <input type="number" id="variablesUpdateInterval" min="0.5" max="60" step="0.5" value="1" style="width: 60px; padding: 2px;" onchange="updateVariablesInterval()">
+                            </label>
+                            <span id="variablesStatus" style="font-size: 11px; color: #666;"></span>
+                        </div>
+                    </div>
                     <div id="variablesContent"></div>
                 </div>
                 
@@ -481,6 +495,20 @@
             </div>
         </div>
 
+        <!-- Seção Filesystem -->
+        <div id="filesystem" class="section">
+            <h2>Gerenciador de Arquivos</h2>
+            <div class="config-group">
+                <p style="margin-bottom: 15px; color: #666;">
+                    Visualize e gerencie os arquivos armazenados no sistema de arquivos LittleFS do ESP32.
+                </p>
+                <button class="btn btn-primary" onclick="loadFiles()">🔄 Atualizar Lista</button>
+                <div id="filesList" style="margin-top: 20px; padding: 15px; background: white; border-radius: 4px; border: 1px solid #dee2e6;">
+                    <p style="color: #666; text-align: center;">Clique em "Atualizar Lista" para carregar os arquivos</p>
+                </div>
+            </div>
+        </div>
+        
         <!-- Seção Console -->
         <div id="console" class="section">
             <h2>Console do Sistema</h2>
@@ -542,9 +570,10 @@
                 stopTimeUpdate();
             }
             
-            if (section === 'wifi') {
-                scanWiFi();
-            }
+            // Scan WiFi agora é manual - apenas quando clicar no botão "Atualizar Scan"
+            // if (section === 'wifi') {
+            //     scanWiFi();
+            // }
             
             if (section === 'wireguard') {
                 updateWireGuardStatus();
@@ -1075,6 +1104,16 @@
                 document.getElementById('parity').value = data.parity || 0;
                 document.getElementById('startBits').value = data.startBits || 1;
                 document.getElementById('modbusTimeout').value = data.timeout || 50;
+                
+                // Carrega configuração de atualização automática das variáveis do localStorage
+                const savedVariablesInterval = localStorage.getItem('variablesUpdateInterval');
+                if (savedVariablesInterval) {
+                    const intervalInput = document.getElementById('variablesUpdateInterval');
+                    if (intervalInput) {
+                        intervalInput.value = savedVariablesInterval;
+                    }
+                }
+                
                 devices = data.devices || [];
                 
                 // Garante que todos os dispositivos e registros tenham campos necessários
@@ -1247,6 +1286,7 @@
                     stopBits: serialSettings.stopBits,
                     parity: serialSettings.parity,
                     startBits: serialSettings.startBits,
+                    timeout: serialSettings.timeout,
                     deviceCount: devices.length,
                     devices: devices,
                     mqtt: {
@@ -1536,6 +1576,10 @@
         const originalShowSection = showSection;
         showSection = function(section) {
             originalShowSection(section);
+            if (section === 'filesystem') {
+                loadFiles();
+            }
+            
             if (section === 'console' && (!ws || ws.readyState !== WebSocket.OPEN)) {
                 initConsole();
             }
@@ -1727,9 +1771,81 @@
             updateGraphVariables();
         }
         
+        // Liga/desliga atualização automática das variáveis
+        function toggleVariablesAutoUpdate() {
+            const enabled = document.getElementById('variablesAutoUpdate').checked;
+            const statusEl = document.getElementById('variablesStatus');
+            const intervalInput = document.getElementById('variablesUpdateInterval');
+            
+            if (enabled) {
+                // Obtém intervalo configurado (em segundos)
+                const intervalSeconds = intervalInput ? parseFloat(intervalInput.value) : 1.0;
+                const intervalMs = intervalSeconds * 1000;
+                
+                // Para intervalo anterior se existir
+                if (variablesUpdateInterval) {
+                    clearInterval(variablesUpdateInterval);
+                }
+                
+                // Inicia atualização com intervalo configurado
+                variablesUpdateInterval = setInterval(loadVariables, intervalMs);
+                
+                if (statusEl) {
+                    statusEl.textContent = `Ativo (${intervalSeconds}s)`;
+                    statusEl.style.color = '#4CAF50';
+                }
+            } else {
+                // Para atualização automática
+                if (variablesUpdateInterval) {
+                    clearInterval(variablesUpdateInterval);
+                    variablesUpdateInterval = null;
+                }
+                
+                if (statusEl) {
+                    statusEl.textContent = 'Desativado';
+                    statusEl.style.color = '#666';
+                }
+            }
+        }
+        
+        // Atualiza intervalo de atualização das variáveis
+        function updateVariablesInterval() {
+            const enabled = document.getElementById('variablesAutoUpdate').checked;
+            if (!enabled) return;
+            
+            const intervalInput = document.getElementById('variablesUpdateInterval');
+            const statusEl = document.getElementById('variablesStatus');
+            
+            if (!intervalInput) return;
+            
+            const intervalSeconds = parseFloat(intervalInput.value);
+            if (isNaN(intervalSeconds) || intervalSeconds < 0.5) {
+                intervalInput.value = 1.0;
+                return;
+            }
+            
+            // Salva no localStorage
+            localStorage.setItem('variablesUpdateInterval', intervalSeconds.toString());
+            
+            // Se a atualização automática está ativa, reinicia com novo intervalo
+            if (enabled) {
+                if (variablesUpdateInterval) {
+                    clearInterval(variablesUpdateInterval);
+                }
+                const intervalMs = intervalSeconds * 1000;
+                variablesUpdateInterval = setInterval(loadVariables, intervalMs);
+                
+                if (statusEl) {
+                    statusEl.textContent = `Ativo (${intervalSeconds}s)`;
+                    statusEl.style.color = '#4CAF50';
+                }
+            }
+        }
+        
         // Variáveis para gráfico em tempo real
         let realtimeChart = null;
         let graphUpdateInterval = null;
+        let variablesUpdateInterval = null;
         const MAX_GRAPH_POINTS = 1000;
         let graphData = {
             labels: [],
@@ -2145,6 +2261,127 @@
                 }
             } catch (error) {
                 showStatus('Erro ao resetar: ' + error.message, true);
+            }
+        }
+        
+        // Função para carregar lista de arquivos do filesystem
+        async function loadFiles() {
+            const filesListDiv = document.getElementById('filesList');
+            filesListDiv.innerHTML = '<p style="color: #666; text-align: center;">Carregando arquivos...</p>';
+            
+            try {
+                const response = await fetch('/api/filesystem/list');
+                const data = await response.json();
+                
+                if (response.ok && data.files) {
+                    if (data.files.length === 0) {
+                        filesListDiv.innerHTML = '<p style="color: #666; text-align: center;">Nenhum arquivo encontrado no filesystem.</p>';
+                        return;
+                    }
+                    
+                    let html = '<table style="width: 100%; border-collapse: collapse; font-size: 14px;">';
+                    html += '<thead><tr style="background: #f8f9fa; border-bottom: 2px solid #dee2e6;">';
+                    html += '<th style="padding: 10px; text-align: left;">Nome do Arquivo</th>';
+                    html += '<th style="padding: 10px; text-align: right;">Tamanho</th>';
+                    html += '<th style="padding: 10px; text-align: center;">Ações</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.files.forEach(file => {
+                        const sizeKB = (file.size / 1024).toFixed(2);
+                        const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                        const sizeStr = file.size < 1024 ? file.size + ' B' : 
+                                       file.size < 1024 * 1024 ? sizeKB + ' KB' : 
+                                       sizeMB + ' MB';
+                        
+                        html += '<tr style="border-bottom: 1px solid #e9ecef;">';
+                        html += '<td style="padding: 10px;"><strong>' + escapeHtml(file.name) + '</strong></td>';
+                        html += '<td style="padding: 10px; text-align: right; color: #666;">' + sizeStr + '</td>';
+                        html += '<td style="padding: 10px; text-align: center;">';
+                        html += '<button class="btn btn-info" onclick="downloadFile(\'' + escapeHtml(file.name) + '\')" style="padding: 5px 10px; font-size: 12px; margin-right: 5px;">⬇️ Baixar</button>';
+                        html += '<button class="btn btn-danger" onclick="deleteFile(\'' + escapeHtml(file.name) + '\')" style="padding: 5px 10px; font-size: 12px;">🗑️ Deletar</button>';
+                        html += '</td>';
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table>';
+                    html += '<p style="margin-top: 15px; color: #666; font-size: 12px;">';
+                    html += 'Total: ' + data.files.length + ' arquivo(s) | Espaço usado: ' + formatBytes(data.totalSize) + ' | Espaço livre: ' + formatBytes(data.freeSpace);
+                    html += '</p>';
+                    
+                    filesListDiv.innerHTML = html;
+                } else {
+                    filesListDiv.innerHTML = '<p style="color: #f44336; text-align: center;">Erro ao carregar arquivos: ' + (data.error || 'Erro desconhecido') + '</p>';
+                }
+            } catch (error) {
+                filesListDiv.innerHTML = '<p style="color: #f44336; text-align: center;">Erro ao carregar arquivos: ' + error + '</p>';
+            }
+        }
+        
+        // Função para formatar bytes
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // Função para baixar arquivo
+        async function downloadFile(filename) {
+            try {
+                const response = await fetch('/api/filesystem/download?file=' + encodeURIComponent(filename));
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    showStatus('Erro ao baixar arquivo: ' + (error.error || 'Erro desconhecido'), true);
+                    return;
+                }
+                
+                // Obtém o conteúdo do arquivo
+                const blob = await response.blob();
+                
+                // Cria um link temporário para download
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                
+                showStatus('Arquivo "' + filename + '" baixado com sucesso!');
+            } catch (error) {
+                showStatus('Erro ao baixar arquivo: ' + error, true);
+            }
+        }
+        
+        // Função para deletar arquivo
+        async function deleteFile(filename) {
+            if (!confirm('Tem certeza que deseja deletar o arquivo "' + filename + '"?\n\nEsta ação não pode ser desfeita!')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/filesystem/delete', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ filename: filename })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok && data.status === 'ok') {
+                    showStatus('Arquivo "' + filename + '" deletado com sucesso!');
+                    // Recarrega a lista de arquivos
+                    setTimeout(() => loadFiles(), 500);
+                } else {
+                    showStatus('Erro ao deletar arquivo: ' + (data.error || 'Erro desconhecido'), true);
+                }
+            } catch (error) {
+                showStatus('Erro ao deletar arquivo: ' + error, true);
             }
         }
         

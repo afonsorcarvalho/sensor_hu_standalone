@@ -304,13 +304,28 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
     }
     // Verifica se é uma variável ou função (identificador)
     else if (isalpha(**expr) || **expr == '_') {
-        // Lê o identificador
-        String identifier = parseIdentifier(expr);
-        if (identifier.length() > 0) {
+        // CRÍTICO: Lê o identificador usando buffer local em vez de String para evitar stack overflow
+        const char* identStart = *expr;
+        const char* identEnd = identStart;
+        while (isalnum(*identEnd) || *identEnd == '_') {
+            identEnd++;
+        }
+        size_t identLen = identEnd - identStart;
+        
+        // Usa buffer local em vez de String
+        char identifier[32];
+        if (identLen >= sizeof(identifier)) {
+            identLen = sizeof(identifier) - 1;
+        }
+        strncpy(identifier, identStart, identLen);
+        identifier[identLen] = '\0';
+        *expr = identEnd; // Avança ponteiro da expressão
+        
+        if (identLen > 0) {
             // Verifica se é uma variável conhecida
             bool isVariable = false;
             for (int i = 0; i < varCount; i++) {
-                if (strcmp(variables[i].name, identifier.c_str()) == 0) {
+                if (strcmp(variables[i].name, identifier) == 0) {
                     result = variables[i].value;
                     termSuccess = true;
                     isVariable = true;
@@ -330,7 +345,7 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                     (*expr)++; // Pula o parêntese de abertura
                     
                     // Verifica se é a função if() que tem sintaxe especial
-                    if (identifier == "if") {
+                    if (strcmp(identifier, "if") == 0) {
                         // if(condição, valor_se_verdadeiro, valor_se_falso)
                         skipSpaces(expr);
                         
@@ -384,7 +399,7 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                         // Retorna valor baseado na condição (qualquer valor != 0 é verdadeiro)
                         result = (fabs(condition) > 0.000001) ? trueValue : falseValue;
                         termSuccess = true;
-                    } else if (identifier == "display" || identifier == "disp") {
+                    } else if (strcmp(identifier, "display") == 0 || strcmp(identifier, "disp") == 0) {
                         // display(valor, endereco_modbus, digitos[, ponto_decimal])
                         // endereco_modbus = endereco do dispositivo (slave)
                         // ponto_decimal = posicao do ponto (0-7). Default: 0
@@ -496,7 +511,7 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                         // Retorna o valor original para permitir uso em expressões
                         result = valueArg;
                         termSuccess = true;
-                    } else if (identifier == "pow") {
+                    } else if (strcmp(identifier, "pow") == 0) {
                         // pow(base, expoente) - requer dois argumentos
                         skipSpaces(expr);
                         if (**expr != '(') {
@@ -558,13 +573,13 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                         (*expr)++;
                         
                         // Aplica a função
-                        if (identifier == "sin") {
+                        if (strcmp(identifier, "sin") == 0) {
                             result = sin(arg);
-                        } else if (identifier == "cos") {
+                        } else if (strcmp(identifier, "cos") == 0) {
                             result = cos(arg);
-                        } else if (identifier == "tan") {
+                        } else if (strcmp(identifier, "tan") == 0) {
                             result = tan(arg);
-                        } else if (identifier == "sqrt") {
+                        } else if (strcmp(identifier, "sqrt") == 0) {
                             if (arg < 0) {
                                 if (errorMsg && errorMsgSize > 0) {
                                     snprintf(errorMsg, errorMsgSize, "Raiz quadrada de numero negativo");
@@ -573,9 +588,9 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                                 return 0.0;
                             }
                             result = sqrt(arg);
-                        } else if (identifier == "abs") {
+                        } else if (strcmp(identifier, "abs") == 0) {
                             result = fabs(arg);
-                        } else if (identifier == "log") {
+                        } else if (strcmp(identifier, "log") == 0) {
                             if (arg <= 0) {
                                 if (errorMsg && errorMsgSize > 0) {
                                     snprintf(errorMsg, errorMsgSize, "Log de numero <= 0");
@@ -584,11 +599,11 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                                 return 0.0;
                             }
                             result = log(arg);
-                        } else if (identifier == "exp") {
+                        } else if (strcmp(identifier, "exp") == 0) {
                             result = exp(arg);
                         } else {
                             if (errorMsg && errorMsgSize > 0) {
-                                snprintf(errorMsg, errorMsgSize, "Funcao desconhecida: %s", identifier.c_str());
+                                snprintf(errorMsg, errorMsgSize, "Funcao desconhecida: %s", identifier);
                             }
                             *success = false;
                             return 0.0;
@@ -598,7 +613,7 @@ static double evalTerm(const char** expr, Variable* variables, int varCount, boo
                 } else {
                     // Identificador não é variável nem função - erro
                     if (errorMsg && errorMsgSize > 0) {
-                        snprintf(errorMsg, errorMsgSize, "Variavel ou funcao desconhecida: %s", identifier.c_str());
+                        snprintf(errorMsg, errorMsgSize, "Variavel ou funcao desconhecida: %s", identifier);
                     }
                     *success = false;
                     return 0.0;
@@ -963,15 +978,193 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
                 output[outputPos] = '\0';
             }
         } else if (isalpha(*pos) || *pos == '_') {
-            // Pode ser uma variável temporária
+            // Pode ser uma variável temporária ou uma função (ex: display(), sin(), etc)
             const char* varStart = pos;
-            String varName = parseIdentifier(&pos);
             
-            if (varName.length() > 0 && tempVariables && tempVarCount > 0) {
+            // CRÍTICO: Verifica se é uma chamada de função (identificador seguido de '(')
+            // Se for, copia a função completa (nome + parênteses + argumentos) sem processar
+            // Isso permite que funções como display() funcionem corretamente em atribuições
+            // IMPORTANTE: Lê o identificador manualmente para evitar usar String (stack overflow)
+            const char* identEnd = pos;
+            while (isalnum(*identEnd) || *identEnd == '_') {
+                identEnd++;
+            }
+            size_t identLen = identEnd - varStart;
+            
+            if (*identEnd == '(') {
+                // É uma chamada de função - precisa processar recursivamente os argumentos
+                // Copia o nome da função
+                size_t funcNameLen = identEnd - varStart;
+                if (outputPos + funcNameLen >= outputSize - 1) {
+                    if (errorMsg && errorMsgSize > 0) {
+                        snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                    }
+                    return false;
+                }
+                strncpy(output + outputPos, varStart, funcNameLen);
+                outputPos += funcNameLen;
+                output[outputPos] = '\0';
+                
+                // Copia o '('
+                if (outputPos >= outputSize - 1) {
+                    if (errorMsg && errorMsgSize > 0) {
+                        snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                    }
+                    return false;
+                }
+                output[outputPos++] = '(';
+                output[outputPos] = '\0';
+                
+                // Processa os argumentos recursivamente (substitui variáveis dentro dos argumentos)
+                pos = identEnd + 1; // Avança para depois do '('
+                int parenDepth = 1; // Já temos um '(' aberto
+                
+                while (*pos != '\0' && parenDepth > 0) {
+                    if (*pos == '(') {
+                        parenDepth++;
+                        if (outputPos >= outputSize - 1) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                            }
+                            return false;
+                        }
+                        output[outputPos++] = *pos;
+                        output[outputPos] = '\0';
+                        pos++;
+                    } else if (*pos == ')') {
+                        parenDepth--;
+                        if (outputPos >= outputSize - 1) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                            }
+                            return false;
+                        }
+                        output[outputPos++] = *pos;
+                        output[outputPos] = '\0';
+                        if (parenDepth == 0) {
+                            pos++; // Avança para depois do ')'
+                            break;
+                        }
+                        pos++;
+                    } else if (isalpha(*pos) || *pos == '_') {
+                        // Pode ser variável temporária dentro dos argumentos - processa recursivamente
+                        const char* argVarStart = pos;
+                        const char* argIdentEnd = pos;
+                        while (isalnum(*argIdentEnd) || *argIdentEnd == '_') {
+                            argIdentEnd++;
+                        }
+                        size_t argIdentLen = argIdentEnd - argVarStart;
+                        
+                        // Se não é função (não tem '(' depois), tenta substituir como variável
+                        if (*argIdentEnd != '(' && tempVariables && tempVarCount > 0) {
+                            char argVarName[32];
+                            if (argIdentLen >= sizeof(argVarName)) {
+                                argIdentLen = sizeof(argVarName) - 1;
+                            }
+                            strncpy(argVarName, argVarStart, argIdentLen);
+                            argVarName[argIdentLen] = '\0';
+                            
+                            // Procura a variável temporária
+                            bool argFound = false;
+                            for (int i = 0; i < tempVarCount; i++) {
+                                if (strcmp(tempVariables[i].name, argVarName) == 0) {
+                                    // Substitui pelo valor
+                                    char argValueStr[32];
+                                    snprintf(argValueStr, sizeof(argValueStr), "%.6f", tempVariables[i].value);
+                                    
+                                    // Remove zeros desnecessários
+                                    size_t argLen = strlen(argValueStr);
+                                    while (argLen > 0 && argValueStr[argLen - 1] == '0' && strchr(argValueStr, '.') != nullptr) {
+                                        argValueStr[argLen - 1] = '\0';
+                                        argLen--;
+                                    }
+                                    if (argLen > 0 && argValueStr[argLen - 1] == '.') {
+                                        argValueStr[argLen - 1] = '\0';
+                                        argLen--;
+                                    }
+                                    
+                                    // Adiciona ao output
+                                    size_t argValueLen = strlen(argValueStr);
+                                    if (outputPos + argValueLen >= outputSize - 1) {
+                                        if (errorMsg && errorMsgSize > 0) {
+                                            snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                                        }
+                                        return false;
+                                    }
+                                    strcpy(output + outputPos, argValueStr);
+                                    outputPos += argValueLen;
+                                    output[outputPos] = '\0';
+                                    pos = argIdentEnd;
+                                    argFound = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!argFound) {
+                                // Não encontrou, copia o identificador
+                                if (outputPos + argIdentLen >= outputSize - 1) {
+                                    if (errorMsg && errorMsgSize > 0) {
+                                        snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                                    }
+                                    return false;
+                                }
+                                strncpy(output + outputPos, argVarStart, argIdentLen);
+                                outputPos += argIdentLen;
+                                output[outputPos] = '\0';
+                                pos = argIdentEnd;
+                            }
+                        } else {
+                            // É função dentro dos argumentos - copia o identificador e continua processando
+                            if (outputPos + argIdentLen >= outputSize - 1) {
+                                if (errorMsg && errorMsgSize > 0) {
+                                    snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                                }
+                                return false;
+                            }
+                            strncpy(output + outputPos, argVarStart, argIdentLen);
+                            outputPos += argIdentLen;
+                            output[outputPos] = '\0';
+                            pos = argIdentEnd;
+                        }
+                    } else {
+                        // Caractere normal, copia
+                        if (outputPos >= outputSize - 1) {
+                            if (errorMsg && errorMsgSize > 0) {
+                                snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
+                            }
+                            return false;
+                        }
+                        output[outputPos++] = *pos;
+                        output[outputPos] = '\0';
+                        pos++;
+                    }
+                }
+                
+                if (parenDepth != 0) {
+                    if (errorMsg && errorMsgSize > 0) {
+                        snprintf(errorMsg, errorMsgSize, "Erro: parentese nao fechado na funcao");
+                    }
+                    return false;
+                }
+                
+                continue; // Continua o loop sem processar mais
+            }
+            
+            // Não é função, processa como variável temporária
+            // Usa buffer local em vez de String para evitar stack overflow
+            char varName[32];
+            if (identLen >= sizeof(varName)) {
+                identLen = sizeof(varName) - 1;
+            }
+            strncpy(varName, varStart, identLen);
+            varName[identLen] = '\0';
+            pos = identEnd; // Avança pos para depois do identificador
+            
+            if (identLen > 0 && tempVariables && tempVarCount > 0) {
                 // Procura a variável temporária
                 bool found = false;
                 for (int i = 0; i < tempVarCount; i++) {
-                    if (strcmp(tempVariables[i].name, varName.c_str()) == 0) {
+                    if (strcmp(tempVariables[i].name, varName) == 0) {
                         // Encontrou a variável, substitui pelo valor
                         char valueStr[32];
                         snprintf(valueStr, sizeof(valueStr), "%.6f", tempVariables[i].value);
@@ -1004,28 +1197,26 @@ bool substituteDeviceValues(const char* expression, DeviceValues* deviceValues, 
                 
                 if (!found) {
                     // Não é variável temporária conhecida, copia o identificador
-                    size_t varLen = varName.length();
-                    if (outputPos + varLen >= outputSize - 1) {
+                    if (outputPos + identLen >= outputSize - 1) {
                         if (errorMsg && errorMsgSize > 0) {
                             snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
                         }
                         return false;
                     }
-                    strncpy(output + outputPos, varStart, varLen);
-                    outputPos += varLen;
+                    strncpy(output + outputPos, varStart, identLen);
+                    outputPos += identLen;
                     output[outputPos] = '\0';
                 }
             } else {
                 // Não há variáveis temporárias ou não encontrou, copia o identificador
-                size_t varLen = varName.length();
-                if (outputPos + varLen >= outputSize - 1) {
+                if (outputPos + identLen >= outputSize - 1) {
                     if (errorMsg && errorMsgSize > 0) {
                         snprintf(errorMsg, errorMsgSize, "Erro: buffer de saida muito pequeno");
                     }
                     return false;
                 }
-                strncpy(output + outputPos, varStart, varLen);
-                outputPos += varLen;
+                strncpy(output + outputPos, varStart, identLen);
+                outputPos += identLen;
                 output[outputPos] = '\0';
             }
         } else {

@@ -127,12 +127,19 @@ void handleResetConfig(AsyncWebServerRequest *request);
 void handleWriteVariable(AsyncWebServerRequest *request, uint8_t *data, size_t len);
 
 /**
- * @brief Handler para scan Modbus RTU (POST /api/modbus/scan)
+ * @brief Handler para listar arquivos do filesystem (GET /api/filesystem/list)
  */
+void handleListFiles(AsyncWebServerRequest *request);
 
 /**
- * @brief Handler para cancelar scan Modbus RTU (POST /api/modbus/scan/cancel)
+ * @brief Handler para baixar arquivo do filesystem (GET /api/filesystem/download)
  */
+void handleDownloadFile(AsyncWebServerRequest *request);
+
+/**
+ * @brief Handler para deletar arquivo do filesystem (POST /api/filesystem/delete)
+ */
+void handleDeleteFile(AsyncWebServerRequest *request, uint8_t *data, size_t len);
 
 #endif // WEB_SERVER_H
 

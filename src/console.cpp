@@ -8,10 +8,21 @@
 #include "modbus_handler.h"
 #include <WiFi.h>
 #include <ESP.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 // Variáveis globais
 AsyncWebSocket* webSocket = nullptr;
 String consoleBuffer = "";
+static SemaphoreHandle_t s_consoleMutex = nullptr;
+
+// Garante que o mutex do console exista antes de usar
+static inline bool ensureConsoleMutex() {
+    if (s_consoleMutex == nullptr) {
+        s_consoleMutex = xSemaphoreCreateMutex();
+    }
+    return (s_consoleMutex != nullptr);
+}
 
 /**
  * @brief Handler de eventos do WebSocket
@@ -26,9 +37,12 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
         client->text("=== Console Modbus RTU Master ===\r\n");
         client->text("Digite 'help' para ver comandos disponiveis.\r\n");
         
-        // Envia buffer de mensagens acumuladas
-        if (consoleBuffer.length() > 0) {
-            client->text(consoleBuffer);
+        // Envia buffer de mensagens acumuladas (protege contra acesso concorrente)
+        if (ensureConsoleMutex() && xSemaphoreTake(s_consoleMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+            if (consoleBuffer.length() > 0) {
+                client->text(consoleBuffer);
+            }
+            xSemaphoreGive(s_consoleMutex);
         }
     }
     else if (type == WS_EVT_DISCONNECT) {
@@ -41,7 +55,12 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
         if (info->final && info->index == 0 && info->len == len) {
             // Mensagem completa recebida
             if (info->opcode == WS_TEXT) {
-                String command = String((char*)data);
+                // CRÍTICO: data NÃO é garantido ser nulo-terminado. Monta o comando usando len.
+                String command;
+                command.reserve(len + 1);
+                for (size_t i = 0; i < len; i++) {
+                    command += (char)data[i];
+                }
                 command.trim();
                 
                 if (command.length() > 0) {
@@ -150,20 +169,27 @@ void consolePrint(String message) {
         Serial.flush(); // Flush quando há quebra de linha ou mensagens grandes
     }
     
+    // Protege consoleBuffer e webSocket->textAll contra acesso concorrente
+    if (!ensureConsoleMutex() || xSemaphoreTake(s_consoleMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        // Se não conseguir lock rápido, não mexe no buffer para evitar corrupção de heap.
+        return;
+    }
+
     // Adiciona mensagem ao buffer
     consoleBuffer += message;
-    
+
     // Envia para todos os clientes conectados
-    // IMPORTANTE: textAll() é não bloqueante, mas yield() ajuda o WebSocket processar
-    if (webSocket) {
+    // Evita chamar textAll() quando não há clientes para reduzir uso do stack TCP/IP
+    if (webSocket && webSocket->count() > 0) {
+        // IMPORTANTE: textAll() é não bloqueante, mas serializamos as chamadas para thread-safety
         webSocket->textAll(message);
-        // Pequeno yield para permitir que o WebSocket processe a mensagem
-        // Isso evita que o buffer do WebSocket encha e cause desconexão
         yield();
     }
-    
+
     // Limita o tamanho do buffer
     if (consoleBuffer.length() > 2000) {
         consoleBuffer = consoleBuffer.substring(consoleBuffer.length() - 1000);
     }
+
+    xSemaphoreGive(s_consoleMutex);
 }

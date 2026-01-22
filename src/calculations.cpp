@@ -7,8 +7,13 @@
 #include "modbus_handler.h"
 #include "console.h"
 #include "kalman_filter.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 void performCalculations() {
+    if (g_processingPaused) {
+        return;
+    }
     
     // Verifica se há código de cálculo configurado
     if (strlen(config.calculationCode) == 0) {
@@ -66,6 +71,9 @@ void performCalculations() {
     int startPos = 0;
     
     while (startPos < codeStr.length()) {
+        if (g_processingPaused) {
+            break;
+        }
         // Encontra o final da linha (caractere de nova linha ou fim da string)
         int endPos = codeStr.indexOf('\n', startPos);
         if (endPos == -1) {
@@ -127,7 +135,8 @@ void performCalculations() {
         double result = 0.0;
         Variable emptyVars[1];
         int emptyVarCount = 0;
-        bool evalSuccess = evaluateExpression(processedExpression, emptyVars, emptyVarCount, &result, errorMsg, sizeof(errorMsg));
+        // CRÍTICO: errorMsg é um ponteiro (char*). sizeof(errorMsg) seria 4/8 e causaria corrupção de heap.
+        bool evalSuccess = evaluateExpression(processedExpression, emptyVars, emptyVarCount, &result, errorMsg, 256);
         
         if (!evalSuccess) {
             // Log de erro no console (mas continua processando outras linhas)
@@ -251,10 +260,24 @@ void performCalculations() {
             // CRÍTICO: Yield antes de operação Modbus para manter webserver responsivo
             yield();
             
+            // CRÍTICO: Reconfigura callbacks RS485 antes de escrever
+            // Isso garante que o controle DE/RE funcione corretamente
             node.begin(slaveAddr, Serial2);
+            node.preTransmission(preTransmission);
+            node.postTransmission(postTransmission);
+            
             uint8_t writeResult = node.writeSingleRegister(targetReg->address, targetReg->value);
             
-            // CRÍTICO: Yield após operação Modbus para manter webserver responsivo
+            // CRÍTICO: Yield e delay após operação Modbus para estabilizar RS485
+            // Isso evita que a próxima operação Modbus (ex: display()) falhe
+            yield();
+            vTaskDelay(pdMS_TO_TICKS(50)); // Delay para estabilizar RS485 após escrita
+            yield();
+            
+            // CRÍTICO: Limpa buffer serial para evitar interferência na próxima operação
+            while (Serial2.available()) {
+                Serial2.read();
+            }
             yield();
             
             if (writeResult == node.ku8MBSuccess) {
